@@ -1,68 +1,293 @@
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  background: #f4f7fb;
+  color: #172033;
+  font-family:
+    Inter,
+    Arial,
+    sans-serif;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+button,
+input {
+  font: inherit;
 }
 
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
   cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+a {
+  color: #2563eb;
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 32px;
+  background: white;
+  border: 1px solid #e3e8f1;
+  border-radius: 16px;
+  box-shadow: 0 12px 35px rgb(15 23 42 / 8%);
+}
+
+.auth-heading {
+  margin-bottom: 24px;
+}
+
+.auth-heading p {
+  margin: 0 0 8px;
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.auth-heading h1 {
+  margin: 0 0 8px;
+}
+
+.auth-heading span {
+  color: #667085;
+}
+
+.form-group {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+
+.form-group label {
+  font-weight: 600;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #cfd6e4;
+  border-radius: 8px;
+  outline: none;
+}
+
+.form-group input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+
+.primary-button,
+.secondary-button {
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 18px;
+  font-weight: 700;
+}
+
+.primary-button {
+  background: #2563eb;
+  color: white;
+}
+
+.secondary-button {
+  background: white;
+  color: #2563eb;
+  border: 1px solid #2563eb;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.auth-footer {
+  margin: 20px 0 0;
+  text-align: center;
+}
+
+.field-error {
+  color: #b42318;
+  font-size: 14px;
+}
+
+.error-banner {
+  margin-bottom: 18px;
+  padding: 12px;
+  color: #b42318;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+  border-radius: 8px;
+}
+
+.dashboard-page {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 40px 0;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 30px;
+}
+
+.dashboard-header h1 {
+  margin: 5px 0 8px;
+}
+
+.dashboard-label {
+  margin: 0;
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 32px;
+}
+
+.summary-card,
+.medication-card {
+  background: white;
+  border: 1px solid #e3e8f1;
+  border-radius: 14px;
+  box-shadow: 0 7px 20px rgb(15 23 42 / 5%);
+}
+
+.summary-card {
+  padding: 22px;
+}
+
+.summary-card p {
+  margin: 0 0 10px;
+  color: #667085;
+}
+
+.summary-card strong {
+  font-size: 28px;
+}
+
+.dashboard-section {
+  margin-top: 20px;
+}
+
+.section-heading {
+  margin-bottom: 18px;
+}
+
+.section-heading h2 {
+  margin-bottom: 5px;
+}
+
+.section-heading p {
+  margin: 0;
+  color: #667085;
+}
+
+.medication-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.medication-card {
+  padding: 20px;
+}
+
+.medication-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.medication-card h3 {
+  margin: 0;
+}
+
+.medication-dosage {
+  color: #667085;
+}
+
+.medication-information {
+  margin: 20px 0;
+}
+
+.status-badge {
+  align-self: flex-start;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-pending {
+  background: #fff4e5;
+  color: #b54708;
+}
+
+.status-taken {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.status-missed {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.status-skipped {
+  background: #f2f4f7;
+  color: #475467;
+}
+
+.not-found-page {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .summary-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
   }
-  a:hover {
-    color: #747bff;
+
+  .medication-grid {
+    grid-template-columns: 1fr;
   }
-  button {
-    background-color: #f9f9f9;
+}
+
+@media (max-width: 600px) {
+  .dashboard-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-card {
+    padding: 23px;
   }
 }
