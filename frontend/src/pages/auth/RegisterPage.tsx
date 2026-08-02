@@ -1,27 +1,36 @@
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-interface LoginErrors {
+interface RegisterErrors {
+  name?: string;
   email?: string;
   password?: string;
+  confirmPassword?: string;
   form?: string;
 }
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const navigate = useNavigate();
 
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] =
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] =
     useState("");
 
   const [errors, setErrors] =
-    useState<LoginErrors>({});
+    useState<RegisterErrors>({});
 
   const [isLoading, setIsLoading] =
     useState(false);
 
-  function validateForm(): LoginErrors {
-    const validationErrors: LoginErrors = {};
+  function validateForm(): RegisterErrors {
+    const validationErrors: RegisterErrors = {};
+
+    if (name.trim().length < 2) {
+      validationErrors.name =
+        "Enter your full name.";
+    }
 
     if (!email.trim()) {
       validationErrors.email =
@@ -41,10 +50,18 @@ export default function LoginPage() {
         "Password must contain at least 8 characters.";
     }
 
+    if (!confirmPassword) {
+      validationErrors.confirmPassword =
+        "Confirm your password.";
+    } else if (confirmPassword !== password) {
+      validationErrors.confirmPassword =
+        "Passwords do not match.";
+    }
+
     return validationErrors;
   }
 
-  async function handleSubmit(
+  async function handleRegister(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
@@ -68,7 +85,7 @@ export default function LoginPage() {
       navigate("/dashboard");
     } catch {
       setErrors({
-        form: "Login failed. Please try again.",
+        form: "Registration failed. Please try again.",
       });
     } finally {
       setIsLoading(false);
@@ -84,11 +101,11 @@ export default function LoginPage() {
           </p>
 
           <h1 style={styles.title}>
-            Welcome back
+            Create account
           </h1>
 
           <p style={styles.subtitle}>
-            Please sign in to your account.
+            Create your patient account.
           </p>
         </div>
 
@@ -102,28 +119,56 @@ export default function LoginPage() {
         )}
 
         <form
-          onSubmit={handleSubmit}
+          onSubmit={handleRegister}
           style={styles.form}
           noValidate
         >
           <div style={styles.inputGroup}>
             <label
               style={styles.label}
-              htmlFor="login-email"
+              htmlFor="register-name"
             >
-              Email address
+              Full name
             </label>
 
             <input
-              id="login-email"
+              id="register-name"
+              type="text"
+              value={name}
+              onChange={(event) =>
+                setName(event.target.value)
+              }
+              disabled={isLoading}
+              style={styles.input}
+              placeholder="Enter your full name"
+              autoComplete="name"
+            />
+
+            {errors.name && (
+              <span style={styles.fieldError}>
+                {errors.name}
+              </span>
+            )}
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label
+              style={styles.label}
+              htmlFor="register-email"
+            >
+              Email
+            </label>
+
+            <input
+              id="register-email"
               type="email"
               value={email}
               onChange={(event) =>
                 setEmail(event.target.value)
               }
+              disabled={isLoading}
               style={styles.input}
               placeholder="Enter your email"
-              disabled={isLoading}
               autoComplete="email"
             />
 
@@ -137,27 +182,57 @@ export default function LoginPage() {
           <div style={styles.inputGroup}>
             <label
               style={styles.label}
-              htmlFor="login-password"
+              htmlFor="register-password"
             >
               Password
             </label>
 
             <input
-              id="login-password"
+              id="register-password"
               type="password"
               value={password}
               onChange={(event) =>
                 setPassword(event.target.value)
               }
-              style={styles.input}
-              placeholder="Enter your password"
               disabled={isLoading}
-              autoComplete="current-password"
+              style={styles.input}
+              placeholder="Create a password"
+              autoComplete="new-password"
             />
 
             {errors.password && (
               <span style={styles.fieldError}>
                 {errors.password}
+              </span>
+            )}
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label
+              style={styles.label}
+              htmlFor="confirm-password"
+            >
+              Confirm password
+            </label>
+
+            <input
+              id="confirm-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) =>
+                setConfirmPassword(
+                  event.target.value,
+                )
+              }
+              disabled={isLoading}
+              style={styles.input}
+              placeholder="Confirm your password"
+              autoComplete="new-password"
+            />
+
+            {errors.confirmPassword && (
+              <span style={styles.fieldError}>
+                {errors.confirmPassword}
               </span>
             )}
           </div>
@@ -168,17 +243,17 @@ export default function LoginPage() {
             disabled={isLoading}
           >
             {isLoading
-              ? "Signing in..."
-              : "Login"}
+              ? "Creating account..."
+              : "Create account"}
           </button>
 
           <p style={styles.footer}>
-            Do not have an account?{" "}
+            Already registered?{" "}
             <Link
-              to="/register"
+              to="/login"
               style={styles.link}
             >
-              Create account
+              Sign in
             </Link>
           </p>
         </form>

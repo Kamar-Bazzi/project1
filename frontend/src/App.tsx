@@ -5,8 +5,8 @@ import {
   Routes,
 } from "react-router-dom";
 
-import LoginPage from "./pages/LoginPage";
-import RegisterPage from "./pages/RegisterPage";
+import LoginPage from "./pages/auth/LoginPage";
+import RegisterPage from "./pages/auth/RegisterPage";
 import PatientDashboardPage from "./pages/patient/PatientDashboardPage";
 
 export default function App() {
