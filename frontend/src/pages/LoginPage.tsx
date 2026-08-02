@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { type FormEvent, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 
 export default function LoginPage() {
@@ -6,7 +6,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
 
-  const handleLogin = (e) => {
+ const handleLogin = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     navigate('/dashboard');
   };
