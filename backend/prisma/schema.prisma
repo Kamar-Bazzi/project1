@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -19,12 +13,179 @@ enum UserRole {
   ADMIN
 }
 
+enum MedicationStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum MedicationLogStatus {
+  PENDING
+  TAKEN
+  MISSED
+  SKIPPED
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum MeasurementType {
+  BLOOD_PRESSURE
+  TEMPERATURE
+  WEIGHT
+  BLOOD_GLUCOSE
+  HEART_RATE
+  OXYGEN_SATURATION
+}
+
 model User {
   id           String   @id @default(uuid())
   name         String
   email        String   @unique
   passwordHash String
-  role         UserRole
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  role         UserRole @default(PATIENT)
+
+  patient   Patient?
+  doctor    Doctor?
+  auditLogs AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Patient {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  dateOfBirth      DateTime?
+  phoneNumber      String?
+  emergencyContact String?
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medications    Medication[]
+  medicationLogs MedicationLog[]
+  measurements   Measurement[]
+  appointments   Appointment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Doctor {
+  id             String  @id @default(uuid())
+  userId         String  @unique
+  specialization String?
+  licenseNumber  String? @unique
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Medication {
+  id           String           @id @default(uuid())
+  patientId    String
+  name         String
+  dosage       String
+  instructions String?
+  startDate    DateTime
+  endDate      DateTime?
+  status       MedicationStatus @default(ACTIVE)
+
+  patient   Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  schedules MedicationSchedule[]
+  logs      MedicationLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+}
+
+model MedicationSchedule {
+  id            String @id @default(uuid())
+  medicationId  String
+  scheduledTime String
+  frequency     String
+
+  medication Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([medicationId])
+}
+
+model MedicationLog {
+  id           String              @id @default(uuid())
+  medicationId String
+  patientId    String
+  scheduledFor DateTime
+  takenAt      DateTime?
+  status       MedicationLogStatus @default(PENDING)
+
+  medication Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  patient    Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([medicationId])
+  @@index([patientId])
+}
+
+model Measurement {
+  id             String          @id @default(uuid())
+  patientId      String
+  type           MeasurementType
+  value          Float
+  secondaryValue Float?
+  unit           String
+  measuredAt     DateTime
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+}
+
+model Appointment {
+  id              String            @id @default(uuid())
+  patientId       String
+  doctorId        String
+  appointmentDate DateTime
+  status          AppointmentStatus @default(SCHEDULED)
+  notes           String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([doctorId])
+}
+
+model AuditLog {
+  id        String  @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
