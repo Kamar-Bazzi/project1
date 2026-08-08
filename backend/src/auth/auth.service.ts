@@ -4,10 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import {
-  User,
-  UserRole,
-} from '@prisma/client';
+import { Prisma, User, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -20,6 +17,8 @@ interface TokenPayload {
   role: UserRole;
 }
 
+const EMAIL_ALREADY_EXISTS = 'An account with this email already exists';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -28,79 +27,77 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const existingUser =
-      await this.prisma.user.findUnique({
-        where: {
-          email: registerDto.email,
-        },
-      });
-
-    if (existingUser) {
-      throw new ConflictException(
-        'An account with this email already exists',
-      );
-    }
-
-    const passwordHash = await bcrypt.hash(
-      registerDto.password,
-      12,
-    );
-
-    const user = await this.prisma.user.create({
-      data: {
-        name: registerDto.name,
+    const existingUser = await this.prisma.user.findUnique({
+      where: {
         email: registerDto.email,
-        passwordHash,
-        role: UserRole.PATIENT,
-        patient: {
-          create: {},
-        },
       },
     });
+
+    if (existingUser) {
+      throw new ConflictException(EMAIL_ALREADY_EXISTS);
+    }
+
+    const passwordHash = await bcrypt.hash(registerDto.password, 12);
+
+    let user: User;
+
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          name: registerDto.name,
+          email: registerDto.email,
+          passwordHash,
+          role: UserRole.PATIENT,
+          patient: {
+            create: {},
+          },
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(EMAIL_ALREADY_EXISTS);
+      }
+
+      throw error;
+    }
 
     return this.createAuthenticationResponse(user);
   }
 
   async login(loginDto: LoginDto) {
-    const user =
-      await this.prisma.user.findUnique({
-        where: {
-          email: loginDto.email,
-        },
-      });
+    const user = await this.prisma.user.findUnique({
+      where: {
+        email: loginDto.email,
+      },
+    });
 
     if (!user) {
-      throw new UnauthorizedException(
-        'Invalid email or password',
-      );
+      throw new UnauthorizedException('Invalid email or password');
     }
 
-    const passwordIsCorrect =
-      await bcrypt.compare(
-        loginDto.password,
-        user.passwordHash,
-      );
+    const passwordIsCorrect = await bcrypt.compare(
+      loginDto.password,
+      user.passwordHash,
+    );
 
     if (!passwordIsCorrect) {
-      throw new UnauthorizedException(
-        'Invalid email or password',
-      );
+      throw new UnauthorizedException('Invalid email or password');
     }
 
     return this.createAuthenticationResponse(user);
   }
 
-  private async createAuthenticationResponse(
-    user: User,
-  ) {
+  private async createAuthenticationResponse(user: User) {
     const payload: TokenPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
     };
 
-    const accessToken =
-      await this.jwtService.signAsync(payload);
+    const accessToken = await this.jwtService.signAsync(payload);
 
     return {
       accessToken,

@@ -11,14 +11,23 @@ export interface RegisterPayload {
   password: string;
 }
 
+export type UserRole = "PATIENT" | "DOCTOR" | "ADMIN";
+
+export interface AuthenticatedUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  createdAt: string;
+}
+
 export interface AuthenticationResponse {
   accessToken: string;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: "PATIENT" | "DOCTOR" | "ADMIN";
-  };
+  user: AuthenticatedUser;
+}
+
+interface CurrentUserResponse {
+  user: AuthenticatedUser;
 }
 
 export const authService = {
@@ -44,5 +53,12 @@ export const authService = {
       );
 
     return response.data;
+  },
+
+  async me(): Promise<AuthenticatedUser> {
+    const response =
+      await api.get<CurrentUserResponse>("/auth/me");
+
+    return response.data.user;
   },
 };

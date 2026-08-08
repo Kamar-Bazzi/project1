@@ -1,252 +1,716 @@
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
+import { useMedications } from "../services/use-medications";
+import {
+  getPrimarySchedule,
+  getTodaysMedicationLog,
+  type Medication,
+  type MedicationLogStatus,
+  type MedicationStatus,
+} from "../types/medication";
 
-interface Medication {
-  id: string;
+type MedicationStatusFilter = "ALL" | MedicationStatus;
+type MedicationLogStatusFilter = "ALL" | MedicationLogStatus;
+
+interface MedicationDraft {
   name: string;
   dosage: string;
   instructions: string;
   scheduledTime: string;
   frequency: string;
   startDate: string;
-  endDate?: string;
-  status: "Active" | "Completed" | "Cancelled";
-  doseStatus: "Pending" | "Taken" | "Missed" | "Skipped";
+  endDate: string;
 }
 
-const initialMedications: Medication[] = [
-  {
-    id: "1",
-    name: "Amoxicillin",
-    dosage: "500 mg",
-    instructions: "Take after breakfast",
-    scheduledTime: "08:00 AM",
-    frequency: "Twice daily",
-    startDate: "2026-08-01",
-    endDate: "2026-08-10",
-    status: "Active",
-    doseStatus: "Pending",
-  },
-  {
-    id: "2",
-    name: "Paracetamol",
-    dosage: "650 mg",
-    instructions: "Take with water if needed",
-    scheduledTime: "02:00 PM",
-    frequency: "As needed",
-    startDate: "2026-08-02",
-    status: "Active",
-    doseStatus: "Taken",
-  },
-  {
-    id: "3",
-    name: "Vitamin D3",
-    dosage: "1000 IU",
-    instructions: "Take with meal",
-    scheduledTime: "10:00 AM",
-    frequency: "Once daily",
-    startDate: "2026-07-15",
-    endDate: "2026-08-15",
-    status: "Active",
-    doseStatus: "Pending",
-  },
+const medicationStatuses: readonly MedicationStatus[] = [
+  "ACTIVE",
+  "COMPLETED",
+  "CANCELLED",
+];
+const medicationLogStatuses: readonly MedicationLogStatus[] = [
+  "PENDING",
+  "TAKEN",
+  "MISSED",
+  "SKIPPED",
 ];
 
-export default function MedicationsPage() {
-  const [medications, setMedications] = useState<Medication[]>(initialMedications);
-  const [isLoading] = useState<boolean>(false);
-  const [error] = useState<string | null>(null);
+function todayForDateInput(): string {
+  const today = new Date();
+  const localToday = new Date(
+    today.getTime() - today.getTimezoneOffset() * 60_000,
+  );
 
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [doseStatusFilter, setDoseStatusFilter] = useState("All");
+  return localToday.toISOString().slice(0, 10);
+}
 
-  // Summary calculations
-  const totalMedications = medications.length;
-  const activeMedications = medications.filter((m) => m.status === "Active").length;
-  const takenToday = medications.filter((m) => m.doseStatus === "Taken").length;
-  const missedToday = medications.filter((m) => m.doseStatus === "Missed").length;
-
-  const handleUpdateDoseStatus = (id: string, newDoseStatus: "Taken" | "Missed" | "Skipped") => {
-    setMedications((prev) =>
-      prev.map((med) => (med.id === id ? { ...med, doseStatus: newDoseStatus } : med))
-    );
+function createEmptyDraft(): MedicationDraft {
+  return {
+    name: "",
+    dosage: "",
+    instructions: "",
+    scheduledTime: "08:00",
+    frequency: "Once daily",
+    startDate: todayForDateInput(),
+    endDate: "",
   };
+}
 
-  const filteredMedications = medications.filter((med) => {
-    const matchesSearch = med.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "All" || med.status === statusFilter;
-    const matchesDoseStatus = doseStatusFilter === "All" || med.doseStatus === doseStatusFilter;
+function formatDate(value: string | null): string {
+  if (!value) {
+    return "Ongoing";
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString();
+}
+
+function formatStatus(value: string): string {
+  return `${value.charAt(0)}${value.slice(1).toLowerCase()}`;
+}
+
+export default function MedicationsPage() {
+  const {
+    medications,
+    addMedication,
+    deleteMedication,
+    updateMedicationLogStatus,
+    updateMedicationStatus,
+  } = useMedications();
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] =
+    useState<MedicationStatusFilter>("ALL");
+  const [doseStatusFilter, setDoseStatusFilter] =
+    useState<MedicationLogStatusFilter>("ALL");
+  const [isAddingMedication, setIsAddingMedication] =
+    useState(false);
+  const [draft, setDraft] =
+    useState<MedicationDraft>(createEmptyDraft);
+  const [formError, setFormError] = useState<string | null>(
+    null,
+  );
+
+  const totalMedications = medications.length;
+  const activeMedications = medications.filter(
+    (medication) => medication.status === "ACTIVE",
+  ).length;
+  const takenToday = medications.filter(
+    (medication) =>
+      getTodaysMedicationLog(medication)?.status === "TAKEN",
+  ).length;
+  const missedToday = medications.filter(
+    (medication) =>
+      getTodaysMedicationLog(medication)?.status === "MISSED",
+  ).length;
+
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const filteredMedications = medications.filter((medication) => {
+    const todaysLog = getTodaysMedicationLog(medication);
+    const matchesSearch = medication.name
+      .toLowerCase()
+      .includes(normalizedSearchTerm);
+    const matchesStatus =
+      statusFilter === "ALL" || medication.status === statusFilter;
+    const matchesDoseStatus =
+      doseStatusFilter === "ALL" ||
+      todaysLog?.status === doseStatusFilter;
+
     return matchesSearch && matchesStatus && matchesDoseStatus;
   });
 
-  if (isLoading) {
-    return <div style={styles.centerMessage}>Loading medications...</div>;
+  function handleAddMedication(
+    event: FormEvent<HTMLFormElement>,
+  ): void {
+    event.preventDefault();
+
+    if (
+      !draft.name.trim() ||
+      !draft.dosage.trim() ||
+      !draft.scheduledTime ||
+      !draft.frequency.trim() ||
+      !draft.startDate
+    ) {
+      setFormError("Complete all required medication fields.");
+      return;
+    }
+
+    if (draft.endDate && draft.endDate < draft.startDate) {
+      setFormError("End date cannot be before the start date.");
+      return;
+    }
+
+    addMedication({
+      name: draft.name,
+      dosage: draft.dosage,
+      instructions: draft.instructions || null,
+      scheduledTime: draft.scheduledTime,
+      frequency: draft.frequency,
+      startDate: draft.startDate,
+      endDate: draft.endDate || null,
+    });
+
+    setDraft(createEmptyDraft());
+    setFormError(null);
+    setIsAddingMedication(false);
   }
 
-  if (error) {
-    return <div style={{ ...styles.centerMessage, color: "#ef4444" }}>{error}</div>;
+  function handleDeleteMedication(medication: Medication): void {
+    const shouldDelete = window.confirm(
+      `Delete ${medication.name}? This removes its local schedules and dose history.`,
+    );
+
+    if (shouldDelete) {
+      deleteMedication(medication.id);
+    }
   }
 
   return (
-    <div style={styles.container}>
-      {/* Header */}
-      <div style={styles.headerRow}>
+    <main style={styles.container}>
+      <header style={styles.headerRow}>
         <div>
           <h1 style={styles.title}>My Medications</h1>
-          <p style={styles.subtitle}>View your medication schedule and track each dose.</p>
+          <p style={styles.subtitle}>
+            View your schedule and track each dose.
+          </p>
         </div>
-        <button style={styles.addButton} onClick={() => alert("Add Medication modal/feature")}>
-          + Add Medication
+
+        <button
+          type="button"
+          style={styles.addButton}
+          onClick={() => {
+            setFormError(null);
+            setIsAddingMedication((isOpen) => !isOpen);
+          }}
+        >
+          {isAddingMedication ? "Close form" : "+ Add medication"}
         </button>
-      </div>
+      </header>
 
-      {/* Summary Cards */}
-      <div style={styles.summaryGrid}>
-        <div style={styles.summaryCard}>
+      {isAddingMedication && (
+        <form style={styles.addForm} onSubmit={handleAddMedication}>
+          <h2 style={styles.formTitle}>Add medication</h2>
+
+          {formError && (
+            <p style={styles.formError} role="alert">
+              {formError}
+            </p>
+          )}
+
+          <div style={styles.formGrid}>
+            <label style={styles.field}>
+              Name *
+              <input
+                value={draft.name}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    name: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+              />
+            </label>
+
+            <label style={styles.field}>
+              Dosage *
+              <input
+                value={draft.dosage}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    dosage: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+                placeholder="e.g. 500 mg"
+              />
+            </label>
+
+            <label style={styles.field}>
+              Scheduled time *
+              <input
+                type="time"
+                value={draft.scheduledTime}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    scheduledTime: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+              />
+            </label>
+
+            <label style={styles.field}>
+              Frequency *
+              <input
+                value={draft.frequency}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    frequency: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+              />
+            </label>
+
+            <label style={styles.field}>
+              Start date *
+              <input
+                type="date"
+                value={draft.startDate}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    startDate: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+              />
+            </label>
+
+            <label style={styles.field}>
+              End date
+              <input
+                type="date"
+                value={draft.endDate}
+                min={draft.startDate}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    endDate: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+              />
+            </label>
+
+            <label style={{ ...styles.field, ...styles.fullWidthField }}>
+              Instructions
+              <input
+                value={draft.instructions}
+                onChange={(event) =>
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    instructions: event.target.value,
+                  }))
+                }
+                style={styles.searchInput}
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+
+          <div style={styles.formActions}>
+            <button type="submit" style={styles.addButton}>
+              Save medication
+            </button>
+            <button
+              type="button"
+              style={styles.actionButton}
+              onClick={() => {
+                setDraft(createEmptyDraft());
+                setFormError(null);
+                setIsAddingMedication(false);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      <section style={styles.summaryGrid}>
+        <article style={styles.summaryCard}>
           <span style={styles.summaryLabel}>Total medications</span>
-          <span style={styles.summaryValue}>{totalMedications}</span>
-        </div>
-        <div style={styles.summaryCard}>
+          <strong style={styles.summaryValue}>{totalMedications}</strong>
+        </article>
+        <article style={styles.summaryCard}>
           <span style={styles.summaryLabel}>Active medications</span>
-          <span style={styles.summaryValue}>{activeMedications}</span>
-        </div>
-        <div style={styles.summaryCard}>
+          <strong style={styles.summaryValue}>{activeMedications}</strong>
+        </article>
+        <article style={styles.summaryCard}>
           <span style={styles.summaryLabel}>Taken today</span>
-          <span style={styles.summaryValue}>{takenToday}</span>
-        </div>
-        <div style={styles.summaryCard}>
+          <strong style={styles.summaryValue}>{takenToday}</strong>
+        </article>
+        <article style={styles.summaryCard}>
           <span style={styles.summaryLabel}>Missed today</span>
-          <span style={styles.summaryValue}>{missedToday}</span>
-        </div>
-      </div>
+          <strong style={styles.summaryValue}>{missedToday}</strong>
+        </article>
+      </section>
 
-      {/* Search and Filters */}
-      <div style={styles.filterContainer}>
+      <section style={styles.filterContainer}>
         <input
-          type="text"
+          type="search"
           placeholder="Search by medication name..."
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(event) => setSearchTerm(event.target.value)}
           style={styles.searchInput}
+          aria-label="Search medications"
         />
 
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(event) =>
+            setStatusFilter(
+              event.target.value as MedicationStatusFilter,
+            )
+          }
           style={styles.selectInput}
+          aria-label="Filter by lifecycle status"
         >
-          <option value="All">Status: All</option>
-          <option value="Active">Active</option>
-          <option value="Completed">Completed</option>
-          <option value="Cancelled">Cancelled</option>
+          <option value="ALL">All lifecycle statuses</option>
+          {medicationStatuses.map((status) => (
+            <option key={status} value={status}>
+              {formatStatus(status)}
+            </option>
+          ))}
         </select>
 
         <select
           value={doseStatusFilter}
-          onChange={(e) => setDoseStatusFilter(e.target.value)}
+          onChange={(event) =>
+            setDoseStatusFilter(
+              event.target.value as MedicationLogStatusFilter,
+            )
+          }
           style={styles.selectInput}
+          aria-label="Filter by dose status"
         >
-          <option value="All">Dose: All</option>
-          <option value="Pending">Pending</option>
-          <option value="Taken">Taken</option>
-          <option value="Missed">Missed</option>
-          <option value="Skipped">Skipped</option>
-        </select>
-      </div>
-
-      {/* Medication List */}
-      {medications.length === 0 ? (
-        <div style={styles.centerMessage}>No medications found.</div>
-      ) : filteredMedications.length === 0 ? (
-        <div style={styles.centerMessage}>No matching medications.</div>
-      ) : (
-        <div style={styles.medGrid}>
-          {filteredMedications.map((med) => (
-            <div key={med.id} style={styles.medCard}>
-              <div style={styles.cardHeader}>
-                <h3 style={styles.medName}>{med.name}</h3>
-                <div style={styles.badgeGroup}>
-                  <span style={getStatusBadgeStyle(med.status)}>{med.status}</span>
-                  <span style={getDoseBadgeStyle(med.doseStatus)}>{med.doseStatus}</span>
-                </div>
-              </div>
-
-              <div style={styles.cardBody}>
-                <p><strong>Dosage:</strong> {med.dosage}</p>
-                <p><strong>Instructions:</strong> {med.instructions}</p>
-                <p><strong>Scheduled Time:</strong> {med.scheduledTime}</p>
-                <p><strong>Frequency:</strong> {med.frequency}</p>
-                <p><strong>Start Date:</strong> {med.startDate}</p>
-                {med.endDate && <p><strong>End Date:</strong> {med.endDate}</p>}
-              </div>
-
-              <div style={styles.cardActions}>
-                <button style={styles.actionBtn} onClick={() => alert(`View details for ${med.name}`)}>View</button>
-                <button style={styles.actionBtn} onClick={() => alert(`Edit ${med.name}`)}>Edit</button>
-                <button style={{ ...styles.actionBtn, color: "#ef4444" }} onClick={() => alert(`Delete ${med.name}`)}>Delete</button>
-
-                {med.doseStatus === "Pending" && (
-                  <>
-                    <button style={{ ...styles.actionBtn, backgroundColor: "#22c55e", color: "#fff" }} onClick={() => handleUpdateDoseStatus(med.id, "Taken")}>
-                      Take
-                    </button>
-                    <button style={{ ...styles.actionBtn, backgroundColor: "#ef4444", color: "#fff" }} onClick={() => handleUpdateDoseStatus(med.id, "Missed")}>
-                      Miss
-                    </button>
-                    <button style={{ ...styles.actionBtn, backgroundColor: "#eab308", color: "#fff" }} onClick={() => handleUpdateDoseStatus(med.id, "Skipped")}>
-                      Skip
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
+          <option value="ALL">All dose statuses</option>
+          {medicationLogStatuses.map((status) => (
+            <option key={status} value={status}>
+              {formatStatus(status)}
+            </option>
           ))}
-        </div>
+        </select>
+      </section>
+
+      {medications.length === 0 ? (
+        <p style={styles.centerMessage}>No medications found.</p>
+      ) : filteredMedications.length === 0 ? (
+        <p style={styles.centerMessage}>No matching medications.</p>
+      ) : (
+        <section style={styles.medicationGrid}>
+          {filteredMedications.map((medication) => {
+            const schedule = getPrimarySchedule(medication);
+            const todaysLog = getTodaysMedicationLog(medication);
+
+            return (
+              <article key={medication.id} style={styles.medicationCard}>
+                <div>
+                  <div style={styles.cardHeader}>
+                    <div>
+                      <h2 style={styles.medicationName}>
+                        {medication.name}
+                      </h2>
+                      <p style={styles.dosage}>{medication.dosage}</p>
+                    </div>
+
+                    <div style={styles.badgeGroup}>
+                      <span
+                        style={getMedicationStatusBadgeStyle(
+                          medication.status,
+                        )}
+                      >
+                        {formatStatus(medication.status)}
+                      </span>
+                      {todaysLog && (
+                        <span
+                          style={getDoseStatusBadgeStyle(
+                            todaysLog.status,
+                          )}
+                        >
+                          {formatStatus(todaysLog.status)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={styles.cardBody}>
+                    <p>
+                      <strong>Instructions:</strong>{" "}
+                      {medication.instructions ??
+                        "No instructions provided"}
+                    </p>
+                    <p>
+                      <strong>Time:</strong>{" "}
+                      {schedule?.scheduledTime ?? "Not scheduled"}
+                    </p>
+                    <p>
+                      <strong>Frequency:</strong>{" "}
+                      {schedule?.frequency ?? "Not specified"}
+                    </p>
+                    <p>
+                      <strong>Start date:</strong>{" "}
+                      {formatDate(medication.startDate)}
+                    </p>
+                    <p>
+                      <strong>End date:</strong>{" "}
+                      {formatDate(medication.endDate)}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={styles.cardActions}>
+                  <label style={styles.statusField}>
+                    Lifecycle
+                    <select
+                      value={medication.status}
+                      onChange={(event) =>
+                        updateMedicationStatus(
+                          medication.id,
+                          event.target.value as MedicationStatus,
+                        )
+                      }
+                      style={styles.compactSelect}
+                    >
+                      {medicationStatuses.map((status) => (
+                        <option key={status} value={status}>
+                          {formatStatus(status)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {todaysLog && medication.status === "ACTIVE" && (
+                    <div style={styles.doseActions}>
+                      {medicationLogStatuses.map((status) => (
+                        <button
+                          key={status}
+                          type="button"
+                          style={{
+                            ...styles.actionButton,
+                            ...(todaysLog.status === status
+                              ? styles.selectedActionButton
+                              : {}),
+                          }}
+                          disabled={todaysLog.status === status}
+                          onClick={() =>
+                            updateMedicationLogStatus(
+                              medication.id,
+                              todaysLog.id,
+                              status,
+                            )
+                          }
+                        >
+                          {formatStatus(status)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    style={styles.deleteButton}
+                    onClick={() =>
+                      handleDeleteMedication(medication)
+                    }
+                  >
+                    Delete
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </section>
       )}
-    </div>
+    </main>
   );
 }
 
-// Helpers for Status Styles
-function getStatusBadgeStyle(status: string) {
-  let bg = "#cbd5e1";
-  let color = "#0f172a";
-  if (status === "Active") { bg = "#dbeafe"; color = "#1e40af"; }
-  else if (status === "Completed") { bg = "#dcfce7"; color = "#166534"; }
-  else if (status === "Cancelled") { bg = "#fee2e2"; color = "#991b1b"; }
-  return { padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "600", backgroundColor: bg, color };
+function getMedicationStatusBadgeStyle(status: MedicationStatus) {
+  const colors: Record<MedicationStatus, { background: string; color: string }> = {
+    ACTIVE: { background: "#dbeafe", color: "#1e40af" },
+    COMPLETED: { background: "#dcfce7", color: "#166534" },
+    CANCELLED: { background: "#fee2e2", color: "#991b1b" },
+  };
+
+  return { ...styles.badge, ...colors[status] };
 }
 
-function getDoseBadgeStyle(doseStatus: string) {
-  let bg = "#cbd5e1";
-  let color = "#0f172a";
-  if (doseStatus === "Pending") { bg = "#fef9c3"; color = "#854d0e"; }
-  else if (doseStatus === "Taken") { bg = "#dcfce7"; color = "#166534"; }
-  else if (doseStatus === "Missed") { bg = "#fee2e2"; color = "#991b1b"; }
-  else if (doseStatus === "Skipped") { bg = "#f3f4f6"; color = "#374151"; }
-  return { padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "600", backgroundColor: bg, color };
+function getDoseStatusBadgeStyle(status: MedicationLogStatus) {
+  const colors: Record<MedicationLogStatus, { background: string; color: string }> = {
+    PENDING: { background: "#fef9c3", color: "#854d0e" },
+    TAKEN: { background: "#dcfce7", color: "#166534" },
+    MISSED: { background: "#fee2e2", color: "#991b1b" },
+    SKIPPED: { background: "#f3f4f6", color: "#374151" },
+  };
+
+  return { ...styles.badge, ...colors[status] };
 }
 
 const styles = {
-  container: { padding: "30px", backgroundColor: "#0f172a", minHeight: "100vh", color: "#f8fafc", boxSizing: "border-box" as const },
-  headerRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", flexWrap: "wrap" as const, gap: "15px" },
+  container: {
+    padding: "30px",
+    backgroundColor: "#0f172a",
+    minHeight: "100vh",
+    color: "#f8fafc",
+  },
+  headerRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "24px",
+    flexWrap: "wrap" as const,
+    gap: "15px",
+  },
   title: { fontSize: "28px", fontWeight: "bold", margin: 0 },
-  subtitle: { fontSize: "14px", color: "#94a3b8", margin: "4px 0 0 0" },
-  addButton: { padding: "10px 16px", backgroundColor: "#38bdf8", color: "#0f172a", fontWeight: "bold", border: "none", borderRadius: "6px", cursor: "pointer" },
-  summaryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "24px" },
-  summaryCard: { backgroundColor: "#1e293b", padding: "20px", borderRadius: "8px", display: "flex", flexDirection: "column" as const, border: "1px solid #334155" },
+  subtitle: { fontSize: "14px", color: "#94a3b8", margin: "4px 0 0" },
+  addButton: {
+    padding: "10px 16px",
+    backgroundColor: "#38bdf8",
+    color: "#0f172a",
+    fontWeight: "bold",
+    border: "none",
+    borderRadius: "6px",
+    cursor: "pointer",
+  },
+  addForm: {
+    backgroundColor: "#1e293b",
+    border: "1px solid #334155",
+    borderRadius: "10px",
+    padding: "20px",
+    marginBottom: "24px",
+  },
+  formTitle: { margin: "0 0 16px" },
+  formError: { color: "#fecaca", margin: "0 0 16px" },
+  formGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: "14px",
+  },
+  field: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "6px",
+    color: "#cbd5e1",
+    fontSize: "13px",
+    fontWeight: "600",
+  },
+  fullWidthField: { gridColumn: "1 / -1" },
+  formActions: { display: "flex", gap: "10px", marginTop: "18px" },
+  summaryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: "16px",
+    marginBottom: "24px",
+  },
+  summaryCard: {
+    backgroundColor: "#1e293b",
+    padding: "20px",
+    borderRadius: "8px",
+    display: "flex",
+    flexDirection: "column" as const,
+    border: "1px solid #334155",
+  },
   summaryLabel: { fontSize: "13px", color: "#94a3b8", marginBottom: "8px" },
-  summaryValue: { fontSize: "24px", fontWeight: "bold", color: "#38bdf8" },
-  filterContainer: { display: "flex", gap: "12px", marginBottom: "24px", flexWrap: "wrap" as const },
-  searchInput: { flex: 1, minWidth: "200px", padding: "10px 12px", borderRadius: "6px", border: "1px solid #334155", backgroundColor: "#1e293b", color: "#fff", outline: "none" },
-  selectInput: { padding: "10px 12px", borderRadius: "6px", border: "1px solid #334155", backgroundColor: "#1e293b", color: "#fff", outline: "none" },
-  medGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" },
-  medCard: { backgroundColor: "#1e293b", borderRadius: "10px", padding: "20px", border: "1px solid #334155", display: "flex", flexDirection: "column" as const, justifyContent: "space-between" },
-  cardHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" },
-  medName: { fontSize: "18px", fontWeight: "bold", margin: 0, color: "#f8fafc" },
-  badgeGroup: { display: "flex", gap: "6px", flexDirection: "column" as const, alignItems: "flex-end" },
-  cardBody: { fontSize: "14px", color: "#cbd5e1", lineHeight: "1.6", marginBottom: "16px" },
-  cardActions: { display: "flex", gap: "8px", flexWrap: "wrap" as const, borderTop: "1px solid #334155", paddingTop: "12px" },
-  actionBtn: { padding: "6px 10px", borderRadius: "4px", border: "1px solid #475569", backgroundColor: "#334155", color: "#f8fafc", fontSize: "12px", cursor: "pointer", fontWeight: "600" },
-  centerMessage: { textAlign: "center" as const, padding: "40px", color: "#94a3b8", fontSize: "16px" },
-}
+  summaryValue: { fontSize: "24px", color: "#38bdf8" },
+  filterContainer: {
+    display: "flex",
+    gap: "12px",
+    marginBottom: "24px",
+    flexWrap: "wrap" as const,
+  },
+  searchInput: {
+    flex: 1,
+    minWidth: "180px",
+    padding: "10px 12px",
+    borderRadius: "6px",
+    border: "1px solid #475569",
+    backgroundColor: "#0f172a",
+    color: "#fff",
+    outline: "none",
+  },
+  selectInput: {
+    padding: "10px 12px",
+    borderRadius: "6px",
+    border: "1px solid #475569",
+    backgroundColor: "#1e293b",
+    color: "#fff",
+  },
+  medicationGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+    gap: "20px",
+  },
+  medicationCard: {
+    backgroundColor: "#1e293b",
+    borderRadius: "10px",
+    padding: "20px",
+    border: "1px solid #334155",
+    display: "flex",
+    flexDirection: "column" as const,
+    justifyContent: "space-between",
+  },
+  cardHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "12px",
+    marginBottom: "12px",
+  },
+  medicationName: { fontSize: "18px", margin: 0 },
+  dosage: { margin: "5px 0 0", color: "#94a3b8" },
+  badgeGroup: {
+    display: "flex",
+    gap: "6px",
+    flexDirection: "column" as const,
+    alignItems: "flex-end",
+  },
+  badge: {
+    padding: "4px 8px",
+    borderRadius: "4px",
+    fontSize: "12px",
+    fontWeight: "600",
+  },
+  cardBody: { fontSize: "14px", color: "#cbd5e1", lineHeight: "1.6" },
+  cardActions: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "10px",
+    borderTop: "1px solid #334155",
+    paddingTop: "12px",
+  },
+  statusField: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "10px",
+    color: "#cbd5e1",
+    fontSize: "13px",
+  },
+  compactSelect: {
+    padding: "6px 8px",
+    borderRadius: "4px",
+    border: "1px solid #475569",
+    backgroundColor: "#0f172a",
+    color: "#fff",
+  },
+  doseActions: { display: "flex", gap: "6px", flexWrap: "wrap" as const },
+  actionButton: {
+    padding: "7px 10px",
+    borderRadius: "4px",
+    border: "1px solid #475569",
+    backgroundColor: "#334155",
+    color: "#f8fafc",
+    cursor: "pointer",
+  },
+  selectedActionButton: { backgroundColor: "#0ea5e9", color: "#082f49" },
+  deleteButton: {
+    padding: "7px 10px",
+    borderRadius: "4px",
+    border: "1px solid #ef4444",
+    backgroundColor: "transparent",
+    color: "#fca5a5",
+    cursor: "pointer",
+    alignSelf: "flex-start",
+  },
+  centerMessage: {
+    textAlign: "center" as const,
+    padding: "40px",
+    color: "#94a3b8",
+  },
+};

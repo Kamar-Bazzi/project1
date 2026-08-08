@@ -11,13 +11,15 @@ export class RegisterDto {
   @IsString()
   @MinLength(2)
   @MaxLength(100)
-  @Transform(({ value }: { value: string }) => value.trim())
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   name: string;
 
   @IsEmail()
   @MaxLength(255)
-  @Transform(({ value }: { value: string }) =>
-    value.trim().toLowerCase(),
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   email: string;
 
@@ -25,8 +27,7 @@ export class RegisterDto {
   @MinLength(8)
   @MaxLength(72)
   @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/, {
-    message:
-      'Password must include uppercase, lowercase, and a number',
+    message: 'Password must include uppercase, lowercase, and a number',
   })
   password: string;
 }

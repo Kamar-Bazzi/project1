@@ -1,5 +1,9 @@
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { getApiErrorMessage } from "../../services/api-error";
+import { getRoleHomePath } from "../../services/auth-routing";
+import { setAccessToken } from "../../services/auth-storage";
+import { authService } from "../../services/auth.service";
 
 interface LoginErrors {
   email?: string;
@@ -22,12 +26,16 @@ export default function LoginPage() {
 
   function validateForm(): LoginErrors {
     const validationErrors: LoginErrors = {};
+    const trimmedEmail = email.trim();
 
-    if (!email.trim()) {
+    if (!trimmedEmail) {
       validationErrors.email =
         "Email is required.";
+    } else if (trimmedEmail.length > 255) {
+      validationErrors.email =
+        "Email must contain at most 255 characters.";
     } else if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
     ) {
       validationErrors.email =
         "Enter a valid email address.";
@@ -39,6 +47,9 @@ export default function LoginPage() {
     } else if (password.length < 8) {
       validationErrors.password =
         "Password must contain at least 8 characters.";
+    } else if (password.length > 72) {
+      validationErrors.password =
+        "Password must contain at most 72 characters.";
     }
 
     return validationErrors;
@@ -60,15 +71,22 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      // Temporary simulation until backend connection.
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 800);
+      const authentication = await authService.login({
+        email: email.trim().toLowerCase(),
+        password,
       });
 
-      navigate("/dashboard");
-    } catch {
+      setAccessToken(authentication.accessToken);
+
+      navigate(getRoleHomePath(authentication.user.role), {
+        replace: true,
+      });
+    } catch (error) {
       setErrors({
-        form: "Login failed. Please try again.",
+        form: getApiErrorMessage(
+          error,
+          "Login failed. Please try again.",
+        ),
       });
     } finally {
       setIsLoading(false);
@@ -125,6 +143,7 @@ export default function LoginPage() {
               placeholder="Enter your email"
               disabled={isLoading}
               autoComplete="email"
+              maxLength={255}
             />
 
             {errors.email && (
@@ -153,6 +172,7 @@ export default function LoginPage() {
               placeholder="Enter your password"
               disabled={isLoading}
               autoComplete="current-password"
+              maxLength={72}
             />
 
             {errors.password && (

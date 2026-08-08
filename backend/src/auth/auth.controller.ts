@@ -30,14 +30,10 @@ interface AuthenticatedRequest extends Request {
 
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private readonly authService: AuthService,
-  ) {}
+  constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  register(
-    @Body() registerDto: RegisterDto,
-  ) {
+  register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
   }
 
@@ -49,9 +45,7 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  getCurrentUser(
-    @Req() request: AuthenticatedRequest,
-  ) {
+  getCurrentUser(@Req() request: AuthenticatedRequest) {
     return {
       user: request.user,
     };

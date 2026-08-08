@@ -1,5 +1,9 @@
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { getApiErrorMessage } from "../../services/api-error";
+import { getRoleHomePath } from "../../services/auth-routing";
+import { setAccessToken } from "../../services/auth-storage";
+import { authService } from "../../services/auth.service";
 
 interface RegisterErrors {
   name?: string;
@@ -26,17 +30,24 @@ export default function RegisterPage() {
 
   function validateForm(): RegisterErrors {
     const validationErrors: RegisterErrors = {};
+    const trimmedEmail = email.trim();
 
     if (name.trim().length < 2) {
       validationErrors.name =
         "Enter your full name.";
+    } else if (name.trim().length > 100) {
+      validationErrors.name =
+        "Name must contain at most 100 characters.";
     }
 
-    if (!email.trim()) {
+    if (!trimmedEmail) {
       validationErrors.email =
         "Email is required.";
+    } else if (trimmedEmail.length > 255) {
+      validationErrors.email =
+        "Email must contain at most 255 characters.";
     } else if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
     ) {
       validationErrors.email =
         "Enter a valid email address.";
@@ -48,6 +59,12 @@ export default function RegisterPage() {
     } else if (password.length < 8) {
       validationErrors.password =
         "Password must contain at least 8 characters.";
+    } else if (password.length > 72) {
+      validationErrors.password =
+        "Password must contain at most 72 characters.";
+    } else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/.test(password)) {
+      validationErrors.password =
+        "Password must include uppercase, lowercase, and a number.";
     }
 
     if (!confirmPassword) {
@@ -77,15 +94,23 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
-      // Temporary simulation until backend connection.
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 800);
+      const authentication = await authService.register({
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        password,
       });
 
-      navigate("/dashboard");
-    } catch {
+      setAccessToken(authentication.accessToken);
+
+      navigate(getRoleHomePath(authentication.user.role), {
+        replace: true,
+      });
+    } catch (error) {
       setErrors({
-        form: "Registration failed. Please try again.",
+        form: getApiErrorMessage(
+          error,
+          "Registration failed. Please try again.",
+        ),
       });
     } finally {
       setIsLoading(false);
@@ -142,6 +167,7 @@ export default function RegisterPage() {
               style={styles.input}
               placeholder="Enter your full name"
               autoComplete="name"
+              maxLength={100}
             />
 
             {errors.name && (
@@ -170,6 +196,7 @@ export default function RegisterPage() {
               style={styles.input}
               placeholder="Enter your email"
               autoComplete="email"
+              maxLength={255}
             />
 
             {errors.email && (
@@ -198,6 +225,7 @@ export default function RegisterPage() {
               style={styles.input}
               placeholder="Create a password"
               autoComplete="new-password"
+              maxLength={72}
             />
 
             {errors.password && (
@@ -228,6 +256,7 @@ export default function RegisterPage() {
               style={styles.input}
               placeholder="Confirm your password"
               autoComplete="new-password"
+              maxLength={72}
             />
 
             {errors.confirmPassword && (
