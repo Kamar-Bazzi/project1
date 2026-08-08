@@ -4,6 +4,8 @@ import {
   useState,
 } from "react";
 import {
+  Link,
+  NavLink,
   Navigate,
   Outlet,
   useLocation,
@@ -51,6 +53,11 @@ export default function ProtectedRoute({
     setAuthState({ status: "unauthenticated" });
     navigate("/login", { replace: true });
   }, [navigate]);
+
+  const refreshUser = useCallback(async (): Promise<void> => {
+    const user = await authService.me();
+    setAuthState({ status: "authenticated", user });
+  }, []);
 
   useEffect(() => {
     window.addEventListener(AUTH_UNAUTHORIZED_EVENT, logout);
@@ -171,28 +178,100 @@ export default function ProtectedRoute({
 
   return (
     <AuthContext.Provider
-      value={{ user: authState.user, logout }}
+      value={{ user: authState.user, logout, refreshUser }}
     >
       <div className="protected-layout">
-        <header className="auth-session-bar">
+        <SessionHeader user={authState.user} onLogout={logout} />
+
+        <Outlet />
+      </div>
+    </AuthContext.Provider>
+  );
+}
+
+interface SessionHeaderProps {
+  user: AuthenticatedUser;
+  onLogout: () => void;
+}
+
+function SessionHeader({ user, onLogout }: SessionHeaderProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const homePath = getRoleHomePath(user.role);
+  const patientLinks = [
+    { to: "/dashboard", label: "Dashboard" },
+    { to: "/medications", label: "Medications" },
+    { to: "/measurements", label: "Measurements" },
+    { to: "/health", label: "Health" },
+    { to: "/wearables", label: "Wearables" },
+    { to: "/profile", label: "Profile" },
+  ];
+  const links =
+    user.role === "PATIENT"
+      ? patientLinks
+      : [{ to: homePath, label: "Dashboard" }];
+
+  return (
+    <header className="app-header">
+      <div className="app-header-inner">
+        <Link className="app-brand" to={homePath}>
+          <span className="app-brand-mark" aria-hidden="true">
+            +
+          </span>
+          <span>
+            <strong>CareTrack</strong>
+            <small>Health companion</small>
+          </span>
+        </Link>
+
+        <button
+          type="button"
+          className="navigation-toggle"
+          aria-expanded={isOpen}
+          aria-controls="primary-navigation"
+          onClick={() => setIsOpen((current) => !current)}
+        >
+          <span aria-hidden="true">☰</span>
+          <span className="sr-only">Toggle navigation</span>
+        </button>
+
+        <div
+          id="primary-navigation"
+          className={`app-navigation-wrap${isOpen ? " is-open" : ""}`}
+        >
+          <nav className="app-navigation" aria-label="Main navigation">
+            {links.map((link) => (
+              <NavLink
+                key={link.to}
+                to={link.to}
+                onClick={() => setIsOpen(false)}
+                className={({ isActive }) =>
+                  `app-navigation-link${isActive ? " is-active" : ""}`
+                }
+              >
+                {link.label}
+              </NavLink>
+            ))}
+          </nav>
+
           <div className="auth-session-identity">
-            <strong>{authState.user.name}</strong>
-            <span>
-              {authState.user.email} · {authState.user.role}
+            <span className="user-avatar" aria-hidden="true">
+              {user.name.trim().charAt(0).toUpperCase() || "U"}
+            </span>
+            <span className="user-copy">
+              <strong>{user.name}</strong>
+              <small>{user.email}</small>
             </span>
           </div>
 
           <button
             type="button"
-            className="secondary-button"
-            onClick={logout}
+            className="button button-ghost button-small"
+            onClick={onLogout}
           >
             Log out
           </button>
-        </header>
-
-        <Outlet />
+        </div>
       </div>
-    </AuthContext.Provider>
+    </header>
   );
 }

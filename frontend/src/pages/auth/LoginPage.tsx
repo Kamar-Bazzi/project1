@@ -13,57 +13,32 @@ interface LoginErrors {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-
   const [email, setEmail] = useState("");
-  const [password, setPassword] =
-    useState("");
-
-  const [errors, setErrors] =
-    useState<LoginErrors>({});
-
-  const [isLoading, setIsLoading] =
-    useState(false);
+  const [password, setPassword] = useState("");
+  const [errors, setErrors] = useState<LoginErrors>({});
+  const [isLoading, setIsLoading] = useState(false);
 
   function validateForm(): LoginErrors {
-    const validationErrors: LoginErrors = {};
+    const nextErrors: LoginErrors = {};
     const trimmedEmail = email.trim();
 
-    if (!trimmedEmail) {
-      validationErrors.email =
-        "Email is required.";
-    } else if (trimmedEmail.length > 255) {
-      validationErrors.email =
-        "Email must contain at most 255 characters.";
-    } else if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
-    ) {
-      validationErrors.email =
-        "Enter a valid email address.";
-    }
+    if (!trimmedEmail) nextErrors.email = "Email is required.";
+    else if (trimmedEmail.length > 255) nextErrors.email = "Email must contain at most 255 characters.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) nextErrors.email = "Enter a valid email address.";
 
-    if (!password) {
-      validationErrors.password =
-        "Password is required.";
-    } else if (password.length < 8) {
-      validationErrors.password =
-        "Password must contain at least 8 characters.";
-    } else if (password.length > 72) {
-      validationErrors.password =
-        "Password must contain at most 72 characters.";
-    }
+    if (!password) nextErrors.password = "Password is required.";
+    else if (password.length < 8) nextErrors.password = "Password must contain at least 8 characters.";
+    else if (password.length > 72) nextErrors.password = "Password must contain at most 72 characters.";
 
-    return validationErrors;
+    return nextErrors;
   }
 
-  async function handleSubmit(
-    event: FormEvent<HTMLFormElement>,
-  ): Promise<void> {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    const nextErrors = validateForm();
 
-    const validationErrors = validateForm();
-
-    if (Object.keys(validationErrors).length > 0) {
-      setErrors(validationErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
 
@@ -75,18 +50,11 @@ export default function LoginPage() {
         email: email.trim().toLowerCase(),
         password,
       });
-
       setAccessToken(authentication.accessToken);
-
-      navigate(getRoleHomePath(authentication.user.role), {
-        replace: true,
-      });
+      navigate(getRoleHomePath(authentication.user.role), { replace: true });
     } catch (error) {
       setErrors({
-        form: getApiErrorMessage(
-          error,
-          "Login failed. Please try again.",
-        ),
+        form: getApiErrorMessage(error, "Login failed. Please try again."),
       });
     } finally {
       setIsLoading(false);
@@ -94,237 +62,82 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={styles.header}>
-          <p style={styles.systemName}>
-            Medical Tracking System
-          </p>
-
-          <h1 style={styles.title}>
-            Welcome back
-          </h1>
-
-          <p style={styles.subtitle}>
-            Please sign in to your account.
-          </p>
+    <main className="auth-page">
+      <AuthWelcome />
+      <section className="auth-card" aria-labelledby="login-title">
+        <div className="auth-heading">
+          <p className="eyebrow">Welcome back</p>
+          <h1 id="login-title">Sign in to CareTrack</h1>
+          <span>Access your private health tracking workspace.</span>
         </div>
 
-        {errors.form && (
-          <div
-            style={styles.errorBanner}
-            role="alert"
-          >
-            {errors.form}
-          </div>
-        )}
+        {errors.form && <div className="alert alert-error" role="alert">{errors.form}</div>}
 
-        <form
-          onSubmit={handleSubmit}
-          style={styles.form}
-          noValidate
-        >
-          <div style={styles.inputGroup}>
-            <label
-              style={styles.label}
-              htmlFor="login-email"
-            >
-              Email address
-            </label>
-
+        <form onSubmit={handleSubmit} className="form-stack" noValidate>
+          <label className="field">
+            <span>Email address</span>
             <input
               id="login-email"
               type="email"
               value={email}
-              onChange={(event) =>
-                setEmail(event.target.value)
-              }
-              style={styles.input}
-              placeholder="Enter your email"
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
               disabled={isLoading}
               autoComplete="email"
               maxLength={255}
+              aria-invalid={Boolean(errors.email)}
+              aria-describedby={errors.email ? "login-email-error" : undefined}
             />
+            {errors.email && <small id="login-email-error" className="field-error">{errors.email}</small>}
+          </label>
 
-            {errors.email && (
-              <span style={styles.fieldError}>
-                {errors.email}
-              </span>
-            )}
-          </div>
-
-          <div style={styles.inputGroup}>
-            <label
-              style={styles.label}
-              htmlFor="login-password"
-            >
-              Password
-            </label>
-
+          <label className="field">
+            <span>Password</span>
             <input
               id="login-password"
               type="password"
               value={password}
-              onChange={(event) =>
-                setPassword(event.target.value)
-              }
-              style={styles.input}
+              onChange={(event) => setPassword(event.target.value)}
               placeholder="Enter your password"
               disabled={isLoading}
               autoComplete="current-password"
               maxLength={72}
+              aria-invalid={Boolean(errors.password)}
+              aria-describedby={errors.password ? "login-password-error" : undefined}
             />
+            {errors.password && <small id="login-password-error" className="field-error">{errors.password}</small>}
+          </label>
 
-            {errors.password && (
-              <span style={styles.fieldError}>
-                {errors.password}
-              </span>
-            )}
-          </div>
-
-          <button
-            type="submit"
-            style={styles.button}
-            disabled={isLoading}
-          >
-            {isLoading
-              ? "Signing in..."
-              : "Login"}
+          <button className="button button-primary button-large full-width" type="submit" disabled={isLoading}>
+            {isLoading ? "Signing in…" : "Sign in"}
           </button>
-
-          <p style={styles.footer}>
-            Do not have an account?{" "}
-            <Link
-              to="/register"
-              style={styles.link}
-            >
-              Create account
-            </Link>
-          </p>
         </form>
-      </div>
-    </div>
+
+        <p className="auth-footer">
+          New to CareTrack? <Link to="/register">Create a patient account</Link>
+        </p>
+      </section>
+    </main>
   );
 }
 
-const styles = {
-  container: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: "100vh",
-    backgroundColor: "#0f172a",
-    padding: "20px",
-  },
-
-  card: {
-    backgroundColor: "#ffffff",
-    padding: "40px",
-    borderRadius: "12px",
-    boxShadow:
-      "0 10px 25px rgba(0, 0, 0, 0.2)",
-    width: "100%",
-    maxWidth: "420px",
-    boxSizing: "border-box" as const,
-  },
-
-  header: {
-    textAlign: "center" as const,
-    marginBottom: "24px",
-  },
-
-  systemName: {
-    fontSize: "13px",
-    fontWeight: "600",
-    color: "#0284c7",
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.5px",
-    margin: "0 0 6px",
-  },
-
-  title: {
-    fontSize: "24px",
-    fontWeight: "bold",
-    color: "#0f172a",
-    margin: "0 0 6px",
-  },
-
-  subtitle: {
-    fontSize: "14px",
-    color: "#64748b",
-    margin: 0,
-  },
-
-  form: {
-    display: "flex",
-    flexDirection: "column" as const,
-  },
-
-  inputGroup: {
-    marginBottom: "16px",
-  },
-
-  label: {
-    fontSize: "14px",
-    fontWeight: "600",
-    color: "#0f172a",
-    marginBottom: "6px",
-    display: "block",
-  },
-
-  input: {
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    fontSize: "14px",
-    outline: "none",
-    boxSizing: "border-box" as const,
-    backgroundColor: "#ffffff",
-    color: "#0f172a",
-  },
-
-  button: {
-    width: "100%",
-    padding: "12px",
-    backgroundColor: "#38bdf8",
-    color: "#0f172a",
-    fontWeight: "bold",
-    border: "none",
-    borderRadius: "6px",
-    cursor: "pointer",
-    marginTop: "10px",
-    fontSize: "16px",
-  },
-
-  errorBanner: {
-    backgroundColor: "#fee2e2",
-    color: "#b91c1c",
-    padding: "10px",
-    borderRadius: "6px",
-    fontSize: "13px",
-    marginBottom: "16px",
-    textAlign: "center" as const,
-  },
-
-  fieldError: {
-    color: "#dc2626",
-    fontSize: "12px",
-    marginTop: "4px",
-    display: "block",
-  },
-
-  footer: {
-    textAlign: "center" as const,
-    marginTop: "20px",
-    marginBottom: 0,
-    fontSize: "14px",
-    color: "#64748b",
-  },
-
-  link: {
-    color: "#0284c7",
-    textDecoration: "none",
-    fontWeight: "600",
-  },
-};
+function AuthWelcome() {
+  return (
+    <section className="auth-welcome" aria-label="CareTrack introduction">
+      <div className="app-brand auth-brand">
+        <span className="app-brand-mark" aria-hidden="true">+</span>
+        <span><strong>CareTrack</strong><small>Health companion</small></span>
+      </div>
+      <div>
+        <p className="eyebrow eyebrow-light">Simple, private health tracking</p>
+        <h2>Your care routine, organized in one place.</h2>
+        <p>Stay current with medications, daily doses, personal measurements, and the information your care team needs.</p>
+      </div>
+      <div className="auth-feature-list">
+        <span><b aria-hidden="true">✓</b> Secure account access</span>
+        <span><b aria-hidden="true">✓</b> Medication reminders and history</span>
+        <span><b aria-hidden="true">✓</b> Personal health measurements</span>
+      </div>
+    </section>
+  );
+}

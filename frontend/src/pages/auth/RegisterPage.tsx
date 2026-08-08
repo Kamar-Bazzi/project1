@@ -4,6 +4,7 @@ import { getApiErrorMessage } from "../../services/api-error";
 import { getRoleHomePath } from "../../services/auth-routing";
 import { setAccessToken } from "../../services/auth-storage";
 import { authService } from "../../services/auth.service";
+import { getBrowserTimeZone } from "../../services/browser-time-zone";
 
 interface RegisterErrors {
   name?: string;
@@ -15,78 +16,44 @@ interface RegisterErrors {
 
 export default function RegisterPage() {
   const navigate = useNavigate();
-
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] =
-    useState("");
-
-  const [errors, setErrors] =
-    useState<RegisterErrors>({});
-
-  const [isLoading, setIsLoading] =
-    useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [errors, setErrors] = useState<RegisterErrors>({});
+  const [isLoading, setIsLoading] = useState(false);
 
   function validateForm(): RegisterErrors {
-    const validationErrors: RegisterErrors = {};
+    const nextErrors: RegisterErrors = {};
+    const trimmedName = name.trim();
     const trimmedEmail = email.trim();
 
-    if (name.trim().length < 2) {
-      validationErrors.name =
-        "Enter your full name.";
-    } else if (name.trim().length > 100) {
-      validationErrors.name =
-        "Name must contain at most 100 characters.";
+    if (trimmedName.length < 2) nextErrors.name = "Enter your full name.";
+    else if (trimmedName.length > 100) nextErrors.name = "Name must contain at most 100 characters.";
+
+    if (!trimmedEmail) nextErrors.email = "Email is required.";
+    else if (trimmedEmail.length > 255) nextErrors.email = "Email must contain at most 255 characters.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) nextErrors.email = "Enter a valid email address.";
+
+    if (!password) nextErrors.password = "Password is required.";
+    else if (password.length < 8) nextErrors.password = "Password must contain at least 8 characters.";
+    else if (password.length > 72) nextErrors.password = "Password must contain at most 72 characters.";
+    else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/.test(password)) {
+      nextErrors.password = "Use uppercase, lowercase, and at least one number.";
     }
 
-    if (!trimmedEmail) {
-      validationErrors.email =
-        "Email is required.";
-    } else if (trimmedEmail.length > 255) {
-      validationErrors.email =
-        "Email must contain at most 255 characters.";
-    } else if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
-    ) {
-      validationErrors.email =
-        "Enter a valid email address.";
-    }
+    if (!confirmPassword) nextErrors.confirmPassword = "Confirm your password.";
+    else if (confirmPassword !== password) nextErrors.confirmPassword = "Passwords do not match.";
 
-    if (!password) {
-      validationErrors.password =
-        "Password is required.";
-    } else if (password.length < 8) {
-      validationErrors.password =
-        "Password must contain at least 8 characters.";
-    } else if (password.length > 72) {
-      validationErrors.password =
-        "Password must contain at most 72 characters.";
-    } else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/.test(password)) {
-      validationErrors.password =
-        "Password must include uppercase, lowercase, and a number.";
-    }
-
-    if (!confirmPassword) {
-      validationErrors.confirmPassword =
-        "Confirm your password.";
-    } else if (confirmPassword !== password) {
-      validationErrors.confirmPassword =
-        "Passwords do not match.";
-    }
-
-    return validationErrors;
+    return nextErrors;
   }
 
-  async function handleRegister(
-    event: FormEvent<HTMLFormElement>,
-  ): Promise<void> {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    const nextErrors = validateForm();
 
-    const validationErrors = validateForm();
-
-    if (Object.keys(validationErrors).length > 0) {
-      setErrors(validationErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
 
@@ -98,13 +65,10 @@ export default function RegisterPage() {
         name: name.trim(),
         email: email.trim().toLowerCase(),
         password,
+        timeZone: getBrowserTimeZone() ?? undefined,
       });
-
       setAccessToken(authentication.accessToken);
-
-      navigate(getRoleHomePath(authentication.user.role), {
-        replace: true,
-      });
+      navigate(getRoleHomePath(authentication.user.role), { replace: true });
     } catch (error) {
       setErrors({
         form: getApiErrorMessage(
@@ -118,297 +82,106 @@ export default function RegisterPage() {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={styles.header}>
-          <p style={styles.systemName}>
-            Medical Tracking System
-          </p>
+    <main className="auth-page auth-page-register">
+      <section className="auth-welcome" aria-label="CareTrack introduction">
+        <div className="app-brand auth-brand">
+          <span className="app-brand-mark" aria-hidden="true">+</span>
+          <span><strong>CareTrack</strong><small>Health companion</small></span>
+        </div>
+        <div>
+          <p className="eyebrow eyebrow-light">Start your health record</p>
+          <h2>Small daily updates build a clearer care picture.</h2>
+          <p>Create your patient account to keep medication schedules and health readings together, wherever you are.</p>
+        </div>
+        <div className="auth-privacy-note">
+          <strong>Your information stays personal.</strong>
+          <span>Account routes are protected and your session is verified with the backend.</span>
+        </div>
+      </section>
 
-          <h1 style={styles.title}>
-            Create account
-          </h1>
-
-          <p style={styles.subtitle}>
-            Create your patient account.
-          </p>
+      <section className="auth-card" aria-labelledby="register-title">
+        <div className="auth-heading">
+          <p className="eyebrow">Patient registration</p>
+          <h1 id="register-title">Create your account</h1>
+          <span>It only takes a minute to get started.</span>
         </div>
 
-        {errors.form && (
-          <div
-            style={styles.errorBanner}
-            role="alert"
-          >
-            {errors.form}
-          </div>
-        )}
+        {errors.form && <div className="alert alert-error" role="alert">{errors.form}</div>}
 
-        <form
-          onSubmit={handleRegister}
-          style={styles.form}
-          noValidate
-        >
-          <div style={styles.inputGroup}>
-            <label
-              style={styles.label}
-              htmlFor="register-name"
-            >
-              Full name
-            </label>
-
+        <form onSubmit={handleSubmit} className="form-stack" noValidate>
+          <label className="field">
+            <span>Full name</span>
             <input
-              id="register-name"
               type="text"
               value={name}
-              onChange={(event) =>
-                setName(event.target.value)
-              }
+              onChange={(event) => setName(event.target.value)}
               disabled={isLoading}
-              style={styles.input}
               placeholder="Enter your full name"
               autoComplete="name"
               maxLength={100}
+              aria-invalid={Boolean(errors.name)}
             />
+            {errors.name && <small className="field-error">{errors.name}</small>}
+          </label>
 
-            {errors.name && (
-              <span style={styles.fieldError}>
-                {errors.name}
-              </span>
-            )}
-          </div>
-
-          <div style={styles.inputGroup}>
-            <label
-              style={styles.label}
-              htmlFor="register-email"
-            >
-              Email
-            </label>
-
+          <label className="field">
+            <span>Email address</span>
             <input
-              id="register-email"
               type="email"
               value={email}
-              onChange={(event) =>
-                setEmail(event.target.value)
-              }
+              onChange={(event) => setEmail(event.target.value)}
               disabled={isLoading}
-              style={styles.input}
-              placeholder="Enter your email"
+              placeholder="you@example.com"
               autoComplete="email"
               maxLength={255}
+              aria-invalid={Boolean(errors.email)}
             />
+            {errors.email && <small className="field-error">{errors.email}</small>}
+          </label>
 
-            {errors.email && (
-              <span style={styles.fieldError}>
-                {errors.email}
-              </span>
-            )}
-          </div>
-
-          <div style={styles.inputGroup}>
-            <label
-              style={styles.label}
-              htmlFor="register-password"
-            >
-              Password
-            </label>
-
+          <label className="field">
+            <span>Password</span>
             <input
-              id="register-password"
               type="password"
               value={password}
-              onChange={(event) =>
-                setPassword(event.target.value)
-              }
+              onChange={(event) => setPassword(event.target.value)}
               disabled={isLoading}
-              style={styles.input}
-              placeholder="Create a password"
+              placeholder="At least 8 characters"
               autoComplete="new-password"
               maxLength={72}
+              aria-invalid={Boolean(errors.password)}
             />
-
-            {errors.password && (
-              <span style={styles.fieldError}>
-                {errors.password}
-              </span>
+            {errors.password ? (
+              <small className="field-error">{errors.password}</small>
+            ) : (
+              <small>Use uppercase, lowercase, and a number.</small>
             )}
-          </div>
+          </label>
 
-          <div style={styles.inputGroup}>
-            <label
-              style={styles.label}
-              htmlFor="confirm-password"
-            >
-              Confirm password
-            </label>
-
+          <label className="field">
+            <span>Confirm password</span>
             <input
-              id="confirm-password"
               type="password"
               value={confirmPassword}
-              onChange={(event) =>
-                setConfirmPassword(
-                  event.target.value,
-                )
-              }
+              onChange={(event) => setConfirmPassword(event.target.value)}
               disabled={isLoading}
-              style={styles.input}
-              placeholder="Confirm your password"
+              placeholder="Re-enter your password"
               autoComplete="new-password"
               maxLength={72}
+              aria-invalid={Boolean(errors.confirmPassword)}
             />
+            {errors.confirmPassword && <small className="field-error">{errors.confirmPassword}</small>}
+          </label>
 
-            {errors.confirmPassword && (
-              <span style={styles.fieldError}>
-                {errors.confirmPassword}
-              </span>
-            )}
-          </div>
-
-          <button
-            type="submit"
-            style={styles.button}
-            disabled={isLoading}
-          >
-            {isLoading
-              ? "Creating account..."
-              : "Create account"}
+          <button className="button button-primary button-large full-width" type="submit" disabled={isLoading}>
+            {isLoading ? "Creating account…" : "Create patient account"}
           </button>
-
-          <p style={styles.footer}>
-            Already registered?{" "}
-            <Link
-              to="/login"
-              style={styles.link}
-            >
-              Sign in
-            </Link>
-          </p>
         </form>
-      </div>
-    </div>
+
+        <p className="auth-footer">
+          Already have an account? <Link to="/login">Sign in</Link>
+        </p>
+      </section>
+    </main>
   );
 }
-
-const styles = {
-  container: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: "100vh",
-    backgroundColor: "#0f172a",
-    padding: "20px",
-  },
-
-  card: {
-    backgroundColor: "#ffffff",
-    padding: "40px",
-    borderRadius: "12px",
-    boxShadow:
-      "0 10px 25px rgba(0, 0, 0, 0.2)",
-    width: "100%",
-    maxWidth: "420px",
-    boxSizing: "border-box" as const,
-  },
-
-  header: {
-    textAlign: "center" as const,
-    marginBottom: "24px",
-  },
-
-  systemName: {
-    fontSize: "13px",
-    fontWeight: "600",
-    color: "#0284c7",
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.5px",
-    margin: "0 0 6px",
-  },
-
-  title: {
-    fontSize: "24px",
-    fontWeight: "bold",
-    color: "#0f172a",
-    margin: "0 0 6px",
-  },
-
-  subtitle: {
-    fontSize: "14px",
-    color: "#64748b",
-    margin: 0,
-  },
-
-  form: {
-    display: "flex",
-    flexDirection: "column" as const,
-  },
-
-  inputGroup: {
-    marginBottom: "16px",
-  },
-
-  label: {
-    fontSize: "14px",
-    fontWeight: "600",
-    color: "#0f172a",
-    marginBottom: "6px",
-    display: "block",
-  },
-
-  input: {
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: "6px",
-    border: "1px solid #cbd5e1",
-    fontSize: "14px",
-    outline: "none",
-    boxSizing: "border-box" as const,
-    backgroundColor: "#ffffff",
-    color: "#0f172a",
-  },
-
-  button: {
-    width: "100%",
-    padding: "12px",
-    backgroundColor: "#38bdf8",
-    color: "#0f172a",
-    fontWeight: "bold",
-    border: "none",
-    borderRadius: "6px",
-    cursor: "pointer",
-    marginTop: "10px",
-    fontSize: "16px",
-  },
-
-  errorBanner: {
-    backgroundColor: "#fee2e2",
-    color: "#b91c1c",
-    padding: "10px",
-    borderRadius: "6px",
-    fontSize: "13px",
-    marginBottom: "16px",
-    textAlign: "center" as const,
-  },
-
-  fieldError: {
-    color: "#dc2626",
-    fontSize: "12px",
-    marginTop: "4px",
-    display: "block",
-  },
-
-  footer: {
-    textAlign: "center" as const,
-    marginTop: "20px",
-    marginBottom: 0,
-    fontSize: "14px",
-    color: "#64748b",
-  },
-
-  link: {
-    color: "#0284c7",
-    textDecoration: "none",
-    fontWeight: "600",
-  },
-};

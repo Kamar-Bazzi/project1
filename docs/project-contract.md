@@ -1,130 +1,69 @@
-\# Medical Tracking Project Contract
+# Medical Tracking Project Contract
 
+## User Roles
 
+### PATIENT
 
-\## User Roles
+- Manage personal medications
+- Record personal measurements
+- View personal appointments
+- View personal medical history
 
+### DOCTOR
 
+- View assigned patients
+- Review patient measurements
+- Add medical notes
+- Manage appointments
 
-\### PATIENT
+### ADMIN
 
+- Manage patients
+- Manage doctors
+- Manage user accounts
+- View audit logs
 
+## Application Pages
 
-\- Manage personal medications
+### Public Pages
 
-\- Record personal measurements
+- LoginPage
+- RegisterPage
 
-\- View personal appointments
+### Patient Pages
 
-\- View personal medical history
+- PatientDashboardPage
+- MedicationsPage
+- MeasurementsPage
+- PatientProfilePage
+- HealthPage
+- WearablesPage
 
+### Doctor Pages
 
+- DoctorDashboardPage
 
-\### DOCTOR
+### Admin Pages
 
+- AdminDashboardPage
 
-
-\- View assigned patients
-
-\- Review patient measurements
-
-\- Add medical notes
-
-\- Manage appointments
-
-
-
-\### ADMIN
-
-
-
-\- Manage patients
-
-\- Manage doctors
-
-\- Manage user accounts
-
-\- View audit logs
-
-
-
-\## Application Pages
-
-
-
-\### Public Pages
-
-
-
-\- LoginPage
-
-\- RegisterPage
-
-\- ForgotPasswordPage
-
-
-
-\### Patient Pages
-
-
-
-\- PatientDashboardPage
-
-\- MedicationsPage
-
-\- AddMedicationPage
-
-\- MeasurementsPage
-
-\- AppointmentsPage
-
-\- MedicalHistoryPage
-
-\- ProfilePage
-
-
-
-\### Doctor Pages
-
-
-
-\- DoctorDashboardPage
-
-\- PatientsPage
-
-\- PatientDetailsPage
-
-\- DoctorAppointmentsPage
-
-
-
-\### Admin Pages
-
-
-
-\- AdminDashboardPage
-
-\- UsersPage
-
-\- DoctorsPage
-
-\- AuditLogsPage
-
-
-
-\## Naming Rule
-
-
+## Naming Rule
 
 Use these exact page names in:
 
+- Figma
+- Frontend folders
+- Documentation
+- UML diagrams
 
+## Wearable Health Boundary
 
-\- Figma
+The web client supports a development-only mock wearable. Real HealthKit and
+Health Connect ingestion requires an iOS or Android companion application;
+Fitbit, Garmin, Samsung, and other providers require a supported native SDK or
+provider API authorization. See [Wearable Health Architecture](wearable-health.md).
 
-\- Frontend folders
-
-\- Documentation
-
-\- UML diagrams
-
+Wearable health is patient-private. Doctors receive no implicit access from
+their role or from the existence of an appointment. A future doctor view must
+require an active, explicit `DoctorPatientAccess` assignment for every patient
+and every object read.

@@ -5,7 +5,14 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  Validate,
+  ValidateIf,
 } from 'class-validator';
+
+import {
+  IsIanaTimeZoneConstraint,
+  MAX_TIME_ZONE_LENGTH,
+} from '../../common/validators/is-iana-time-zone.validator';
 
 export class RegisterDto {
   @IsString()
@@ -30,4 +37,14 @@ export class RegisterDto {
     message: 'Password must include uppercase, lowercase, and a number',
   })
   password: string;
+
+  @ValidateIf((_object, value: unknown) => value !== undefined)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(MAX_TIME_ZONE_LENGTH)
+  @Validate(IsIanaTimeZoneConstraint)
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  timeZone?: string;
 }

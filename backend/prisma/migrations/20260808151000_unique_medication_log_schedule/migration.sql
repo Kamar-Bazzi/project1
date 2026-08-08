@@ -1,0 +1,6 @@
+-- Intentionally left non-destructive.
+--
+-- A medication and UTC instant are not a safe dose identity: during a
+-- daylight-saving gap, two different patient-local schedule times can resolve
+-- to the same instant. The following migration introduces the correct
+-- scheduleId + scheduleDate identity without deleting either dose.

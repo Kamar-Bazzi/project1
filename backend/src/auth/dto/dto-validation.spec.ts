@@ -29,4 +29,34 @@ describe('authentication DTO transforms', () => {
 
     expect(errors.map(({ property }) => property)).toContain('email');
   });
+
+  it('accepts a valid registration timezone and rejects an invalid one', async () => {
+    const validDto = plainToInstance(RegisterDto, {
+      name: 'Test Patient',
+      email: 'patient@example.com',
+      password: 'ValidPass1',
+      timeZone: '  Asia/Beirut  ',
+    });
+    const invalidDto = plainToInstance(RegisterDto, {
+      name: 'Test Patient',
+      email: 'patient@example.com',
+      password: 'ValidPass1',
+      timeZone: 'Not/A-Time-Zone',
+    });
+    const nullDto = plainToInstance(RegisterDto, {
+      name: 'Test Patient',
+      email: 'patient@example.com',
+      password: 'ValidPass1',
+      timeZone: null,
+    });
+
+    await expect(validate(validDto)).resolves.toHaveLength(0);
+    expect(validDto.timeZone).toBe('Asia/Beirut');
+    expect(
+      (await validate(invalidDto)).map(({ property }) => property),
+    ).toContain('timeZone');
+    expect((await validate(nullDto)).map(({ property }) => property)).toContain(
+      'timeZone',
+    );
+  });
 });

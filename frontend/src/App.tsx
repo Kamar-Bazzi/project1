@@ -11,7 +11,11 @@ import LoginPage from "./pages/auth/LoginPage";
 import RegisterPage from "./pages/auth/RegisterPage";
 import DoctorDashboardPage from "./pages/doctor/DoctorDashboardPage";
 import MedicationsPage from "./pages/MedicationsPage";
+import MeasurementsPage from "./pages/MeasurementsPage";
+import HealthPage from "./pages/patient/HealthPage";
 import PatientDashboardPage from "./pages/patient/PatientDashboardPage";
+import PatientProfilePage from "./pages/patient/PatientProfilePage";
+import WearablesPage from "./pages/patient/WearablesPage";
 
 export default function App() {
   return (
@@ -33,6 +37,22 @@ export default function App() {
           <Route
             path="/medications"
             element={<MedicationsPage />}
+          />
+          <Route
+            path="/measurements"
+            element={<MeasurementsPage />}
+          />
+          <Route
+            path="/health"
+            element={<HealthPage />}
+          />
+          <Route
+            path="/wearables"
+            element={<WearablesPage />}
+          />
+          <Route
+            path="/profile"
+            element={<PatientProfilePage />}
           />
         </Route>
 

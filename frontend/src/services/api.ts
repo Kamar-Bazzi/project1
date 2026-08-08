@@ -4,6 +4,7 @@ import {
   getAccessToken,
   notifyUnauthorized,
 } from "./auth-storage";
+import { getBrowserTimeZone } from "./browser-time-zone";
 
 const publicAuthEndpoints = [
   "/auth/login",
@@ -29,12 +30,18 @@ const api = axios.create({
   timeout: 10000,
 });
 
+const browserTimeZone = getBrowserTimeZone();
+
 api.interceptors.request.use((config) => {
   const accessToken = getAccessToken();
 
   if (accessToken && !isPublicAuthRequest(config.url)) {
     config.headers.Authorization =
       `Bearer ${accessToken}`;
+  }
+
+  if (browserTimeZone) {
+    config.headers["X-Time-Zone"] = browserTimeZone;
   }
 
   return config;

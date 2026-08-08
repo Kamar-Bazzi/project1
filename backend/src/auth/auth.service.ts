@@ -7,6 +7,10 @@ import { JwtService } from '@nestjs/jwt';
 import { Prisma, User, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
+import {
+  canonicalizeIanaTimeZone,
+  DEFAULT_TIME_ZONE,
+} from '../common/validators/is-iana-time-zone.validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -49,7 +53,11 @@ export class AuthService {
           passwordHash,
           role: UserRole.PATIENT,
           patient: {
-            create: {},
+            create: {
+              timeZone:
+                canonicalizeIanaTimeZone(registerDto.timeZone) ??
+                DEFAULT_TIME_ZONE,
+            },
           },
         },
       });

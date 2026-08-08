@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from "../../services/auth.service";
 export interface AuthContextValue {
   user: AuthenticatedUser;
   logout: () => void;
+  refreshUser: () => Promise<void>;
 }
 
 export const AuthContext =

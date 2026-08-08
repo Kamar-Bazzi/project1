@@ -9,6 +9,7 @@ export interface RegisterPayload {
   name: string;
   email: string;
   password: string;
+  timeZone?: string;
 }
 
 export type UserRole = "PATIENT" | "DOCTOR" | "ADMIN";

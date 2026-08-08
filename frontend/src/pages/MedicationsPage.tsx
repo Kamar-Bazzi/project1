@@ -1,9 +1,13 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { useMedications } from "../services/use-medications";
 import {
-  getPrimarySchedule,
-  getTodaysMedicationLog,
+  formatMedicationDoseTime,
+  formatEnumLabel,
+  getTodaysMedicationLogs,
+  medicationLogStatuses,
+  medicationStatuses,
   type Medication,
+  type MedicationInput,
   type MedicationLogStatus,
   type MedicationStatus,
 } from "../types/medication";
@@ -15,31 +19,16 @@ interface MedicationDraft {
   name: string;
   dosage: string;
   instructions: string;
-  scheduledTime: string;
-  frequency: string;
   startDate: string;
   endDate: string;
+  schedules: Array<{ scheduledTime: string }>;
 }
-
-const medicationStatuses: readonly MedicationStatus[] = [
-  "ACTIVE",
-  "COMPLETED",
-  "CANCELLED",
-];
-const medicationLogStatuses: readonly MedicationLogStatus[] = [
-  "PENDING",
-  "TAKEN",
-  "MISSED",
-  "SKIPPED",
-];
 
 function todayForDateInput(): string {
   const today = new Date();
-  const localToday = new Date(
-    today.getTime() - today.getTimezoneOffset() * 60_000,
-  );
-
-  return localToday.toISOString().slice(0, 10);
+  return new Date(today.getTime() - today.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 function createEmptyDraft(): MedicationDraft {
@@ -47,91 +36,138 @@ function createEmptyDraft(): MedicationDraft {
     name: "",
     dosage: "",
     instructions: "",
-    scheduledTime: "08:00",
-    frequency: "Once daily",
     startDate: todayForDateInput(),
     endDate: "",
+    schedules: [{ scheduledTime: "08:00" }],
+  };
+}
+
+function toDateInput(value: string | null): string {
+  return value ? value.slice(0, 10) : "";
+}
+
+function draftFromMedication(medication: Medication): MedicationDraft {
+  return {
+    name: medication.name,
+    dosage: medication.dosage,
+    instructions: medication.instructions ?? "",
+    startDate: toDateInput(medication.startDate),
+    endDate: toDateInput(medication.endDate),
+    schedules: medication.schedules.map(({ scheduledTime }) => ({
+      scheduledTime,
+    })),
   };
 }
 
 function formatDate(value: string | null): string {
-  if (!value) {
-    return "Ongoing";
-  }
-
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleDateString();
-}
-
-function formatStatus(value: string): string {
-  return `${value.charAt(0)}${value.slice(1).toLowerCase()}`;
+  if (!value) return "Ongoing";
+  const dateKey = value.slice(0, 10);
+  const date = new Date(`${dateKey}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
 }
 
 export default function MedicationsPage() {
   const {
     medications,
+    isLoading,
+    error,
+    actionError,
+    mutationKey,
+    refresh,
+    clearActionError,
     addMedication,
+    updateMedication,
     deleteMedication,
     updateMedicationLogStatus,
-    updateMedicationStatus,
   } = useMedications();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] =
     useState<MedicationStatusFilter>("ALL");
   const [doseStatusFilter, setDoseStatusFilter] =
     useState<MedicationLogStatusFilter>("ALL");
-  const [isAddingMedication, setIsAddingMedication] =
-    useState(false);
-  const [draft, setDraft] =
-    useState<MedicationDraft>(createEmptyDraft);
-  const [formError, setFormError] = useState<string | null>(
-    null,
-  );
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<MedicationDraft>(createEmptyDraft);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const totalMedications = medications.length;
+  const todaysLogs = useMemo(
+    () => medications.flatMap((medication) => getTodaysMedicationLogs(medication)),
+    [medications],
+  );
   const activeMedications = medications.filter(
     (medication) => medication.status === "ACTIVE",
   ).length;
-  const takenToday = medications.filter(
-    (medication) =>
-      getTodaysMedicationLog(medication)?.status === "TAKEN",
-  ).length;
-  const missedToday = medications.filter(
-    (medication) =>
-      getTodaysMedicationLog(medication)?.status === "MISSED",
+  const takenToday = todaysLogs.filter((log) => log.status === "TAKEN").length;
+  const attentionToday = todaysLogs.filter(
+    (log) => log.status === "MISSED" || log.status === "SKIPPED",
   ).length;
 
-  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
-  const filteredMedications = medications.filter((medication) => {
-    const todaysLog = getTodaysMedicationLog(medication);
-    const matchesSearch = medication.name
-      .toLowerCase()
-      .includes(normalizedSearchTerm);
-    const matchesStatus =
-      statusFilter === "ALL" || medication.status === statusFilter;
-    const matchesDoseStatus =
-      doseStatusFilter === "ALL" ||
-      todaysLog?.status === doseStatusFilter;
+  const filteredMedications = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
 
-    return matchesSearch && matchesStatus && matchesDoseStatus;
-  });
+    return medications.filter((medication) => {
+      const medicationLogs = getTodaysMedicationLogs(medication);
+      const matchesSearch =
+        !normalizedSearch ||
+        medication.name.toLowerCase().includes(normalizedSearch) ||
+        medication.dosage.toLowerCase().includes(normalizedSearch);
+      const matchesStatus =
+        statusFilter === "ALL" || medication.status === statusFilter;
+      const matchesDoseStatus =
+        doseStatusFilter === "ALL" ||
+        medicationLogs.some((log) => log.status === doseStatusFilter);
 
-  function handleAddMedication(
-    event: FormEvent<HTMLFormElement>,
-  ): void {
+      return matchesSearch && matchesStatus && matchesDoseStatus;
+    });
+  }, [doseStatusFilter, medications, searchTerm, statusFilter]);
+
+  function openCreateForm(): void {
+    setEditingId(null);
+    setDraft(createEmptyDraft());
+    setFormError(null);
+    setSuccessMessage(null);
+    clearActionError();
+    setIsFormOpen(true);
+  }
+
+  function openEditForm(medication: Medication): void {
+    setEditingId(medication.id);
+    setDraft(draftFromMedication(medication));
+    setFormError(null);
+    setSuccessMessage(null);
+    clearActionError();
+    setIsFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function closeForm(): void {
+    setIsFormOpen(false);
+    setEditingId(null);
+    setDraft(createEmptyDraft());
+    setFormError(null);
+    clearActionError();
+  }
+
+  function updateSchedule(index: number, value: string): void {
+    setDraft((current) => ({
+      ...current,
+      schedules: current.schedules.map((schedule, scheduleIndex) =>
+        scheduleIndex === index
+          ? { ...schedule, scheduledTime: value }
+          : schedule,
+      ),
+    }));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    setFormError(null);
+    setSuccessMessage(null);
+    clearActionError();
 
-    if (
-      !draft.name.trim() ||
-      !draft.dosage.trim() ||
-      !draft.scheduledTime ||
-      !draft.frequency.trim() ||
-      !draft.startDate
-    ) {
-      setFormError("Complete all required medication fields.");
+    if (!draft.name.trim() || !draft.dosage.trim() || !draft.startDate) {
+      setFormError("Name, dosage, and start date are required.");
       return;
     }
 
@@ -140,377 +176,454 @@ export default function MedicationsPage() {
       return;
     }
 
-    addMedication({
-      name: draft.name,
-      dosage: draft.dosage,
-      instructions: draft.instructions || null,
-      scheduledTime: draft.scheduledTime,
-      frequency: draft.frequency,
+    if (
+      draft.schedules.length === 0 ||
+      draft.schedules.some((schedule) => !schedule.scheduledTime)
+    ) {
+      setFormError("Every daily schedule needs a time.");
+      return;
+    }
+
+    if (new Set(draft.schedules.map((schedule) => schedule.scheduledTime)).size !== draft.schedules.length) {
+      setFormError("Each medication schedule must use a unique time.");
+      return;
+    }
+
+    const input: MedicationInput = {
+      name: draft.name.trim(),
+      dosage: draft.dosage.trim(),
+      instructions: draft.instructions.trim() || null,
       startDate: draft.startDate,
       endDate: draft.endDate || null,
-    });
+      schedules: draft.schedules.map((schedule) => ({
+        scheduledTime: schedule.scheduledTime,
+        frequency: "DAILY",
+      })),
+    };
 
-    setDraft(createEmptyDraft());
-    setFormError(null);
-    setIsAddingMedication(false);
-  }
+    const succeeded = editingId
+      ? await updateMedication(editingId, input)
+      : await addMedication(input);
 
-  function handleDeleteMedication(medication: Medication): void {
-    const shouldDelete = window.confirm(
-      `Delete ${medication.name}? This removes its local schedules and dose history.`,
-    );
-
-    if (shouldDelete) {
-      deleteMedication(medication.id);
+    if (succeeded) {
+      const message = editingId ? "Medication updated." : "Medication added.";
+      closeForm();
+      setSuccessMessage(message);
     }
   }
 
-  return (
-    <main style={styles.container}>
-      <header style={styles.headerRow}>
-        <div>
-          <h1 style={styles.title}>My Medications</h1>
-          <p style={styles.subtitle}>
-            View your schedule and track each dose.
-          </p>
-        </div>
+  async function handleDelete(medication: Medication): Promise<void> {
+    const shouldDelete = window.confirm(
+      `Delete ${medication.name}? Its schedules and dose history will also be removed.`,
+    );
 
-        <button
-          type="button"
-          style={styles.addButton}
-          onClick={() => {
-            setFormError(null);
-            setIsAddingMedication((isOpen) => !isOpen);
-          }}
-        >
-          {isAddingMedication ? "Close form" : "+ Add medication"}
+    if (!shouldDelete) return;
+
+    setSuccessMessage(null);
+    const succeeded = await deleteMedication(medication.id);
+    if (succeeded) setSuccessMessage("Medication deleted.");
+  }
+
+  return (
+    <main className="page-shell">
+      <header className="page-heading page-heading-actions">
+        <div>
+          <p className="eyebrow">Treatment plan</p>
+          <h1>Medications</h1>
+          <p>Manage prescriptions and record every scheduled dose.</p>
+        </div>
+        <button className="button button-primary" type="button" onClick={openCreateForm}>
+          <span aria-hidden="true">＋</span> Add medication
         </button>
       </header>
 
-      {isAddingMedication && (
-        <form style={styles.addForm} onSubmit={handleAddMedication}>
-          <h2 style={styles.formTitle}>Add medication</h2>
-
-          {formError && (
-            <p style={styles.formError} role="alert">
-              {formError}
-            </p>
-          )}
-
-          <div style={styles.formGrid}>
-            <label style={styles.field}>
-              Name *
-              <input
-                value={draft.name}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    name: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-              />
-            </label>
-
-            <label style={styles.field}>
-              Dosage *
-              <input
-                value={draft.dosage}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    dosage: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-                placeholder="e.g. 500 mg"
-              />
-            </label>
-
-            <label style={styles.field}>
-              Scheduled time *
-              <input
-                type="time"
-                value={draft.scheduledTime}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    scheduledTime: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-              />
-            </label>
-
-            <label style={styles.field}>
-              Frequency *
-              <input
-                value={draft.frequency}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    frequency: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-              />
-            </label>
-
-            <label style={styles.field}>
-              Start date *
-              <input
-                type="date"
-                value={draft.startDate}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    startDate: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-              />
-            </label>
-
-            <label style={styles.field}>
-              End date
-              <input
-                type="date"
-                value={draft.endDate}
-                min={draft.startDate}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    endDate: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-              />
-            </label>
-
-            <label style={{ ...styles.field, ...styles.fullWidthField }}>
-              Instructions
-              <input
-                value={draft.instructions}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({
-                    ...currentDraft,
-                    instructions: event.target.value,
-                  }))
-                }
-                style={styles.searchInput}
-                placeholder="Optional"
-              />
-            </label>
+      {isFormOpen && (
+        <section className="card form-card page-form" aria-labelledby="medication-form-title">
+          <div className="section-heading section-heading-actions">
+            <div>
+              <h2 id="medication-form-title">
+                {editingId ? "Edit medication" : "Add a medication"}
+              </h2>
+              <p>Enter the prescription details and daily schedule.</p>
+            </div>
+            <button className="icon-button" type="button" onClick={closeForm} aria-label="Close form">×</button>
           </div>
 
-          <div style={styles.formActions}>
-            <button type="submit" style={styles.addButton}>
-              Save medication
-            </button>
-            <button
-              type="button"
-              style={styles.actionButton}
-              onClick={() => {
-                setDraft(createEmptyDraft());
-                setFormError(null);
-                setIsAddingMedication(false);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
+          {formError && <div className="alert alert-error" role="alert">{formError}</div>}
+          {actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
+
+          <form className="form-stack" onSubmit={handleSubmit} noValidate>
+            <div className="form-grid">
+              <label className="field">
+                <span>Medication name</span>
+                <input
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, name: event.target.value }))
+                  }
+                  disabled={mutationKey !== null}
+                  maxLength={100}
+                  placeholder="e.g. Metformin"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Dosage</span>
+                <input
+                  value={draft.dosage}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, dosage: event.target.value }))
+                  }
+                  disabled={mutationKey !== null}
+                  maxLength={100}
+                  placeholder="e.g. 500 mg"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Start date</span>
+                <input
+                  type="date"
+                  value={draft.startDate}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, startDate: event.target.value }))
+                  }
+                  disabled={mutationKey !== null}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>End date</span>
+                <input
+                  type="date"
+                  min={draft.startDate}
+                  value={draft.endDate}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, endDate: event.target.value }))
+                  }
+                  disabled={mutationKey !== null}
+                />
+              </label>
+              <label className="field field-wide">
+                <span>Instructions</span>
+                <textarea
+                  value={draft.instructions}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      instructions: event.target.value,
+                    }))
+                  }
+                  disabled={mutationKey !== null}
+                  maxLength={1000}
+                  rows={3}
+                  placeholder="e.g. Take with food"
+                />
+              </label>
+            </div>
+
+            <fieldset className="schedule-fieldset">
+              <div className="fieldset-heading">
+                <div>
+                  <legend>Daily dose times</legend>
+                  <p>Add up to eight unique times. Each schedule repeats daily.</p>
+                </div>
+                <button
+                  className="button button-secondary button-small"
+                  type="button"
+                  disabled={mutationKey !== null || draft.schedules.length >= 8}
+                  onClick={() =>
+                    setDraft((current) => ({
+                      ...current,
+                      schedules: [
+                        ...current.schedules,
+                        { scheduledTime: "12:00" },
+                      ],
+                    }))
+                  }
+                >
+                  ＋ Add time
+                </button>
+              </div>
+
+              <div className="schedule-list">
+                {draft.schedules.map((schedule, index) => (
+                  <div className="schedule-row" key={`${index}-${draft.schedules.length}`}>
+                    <label className="field">
+                      <span>Time {index + 1}</span>
+                      <input
+                        type="time"
+                        value={schedule.scheduledTime}
+                        disabled={mutationKey !== null}
+                        onChange={(event) =>
+                          updateSchedule(index, event.target.value)
+                        }
+                        required
+                      />
+                    </label>
+                    <button
+                      className="icon-button icon-button-danger schedule-remove"
+                      type="button"
+                      aria-label={`Remove schedule ${index + 1}`}
+                      disabled={mutationKey !== null || draft.schedules.length === 1}
+                      onClick={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          schedules: current.schedules.filter(
+                            (_, scheduleIndex) => scheduleIndex !== index,
+                          ),
+                        }))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </fieldset>
+
+            <div className="form-actions">
+              <button className="button button-primary" type="submit" disabled={mutationKey !== null}>
+                {mutationKey ? "Saving…" : editingId ? "Save changes" : "Add medication"}
+              </button>
+              <button className="button button-secondary" type="button" disabled={mutationKey !== null} onClick={closeForm}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
       )}
 
-      <section style={styles.summaryGrid}>
-        <article style={styles.summaryCard}>
-          <span style={styles.summaryLabel}>Total medications</span>
-          <strong style={styles.summaryValue}>{totalMedications}</strong>
+      {successMessage && <div className="alert alert-success" role="status">{successMessage}</div>}
+      {!isFormOpen && actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
+
+      <section className="summary-grid" aria-label="Medication summary">
+        <article className="summary-card">
+          <span className="summary-icon summary-icon-blue" aria-hidden="true">Rx</span>
+          <div><p>Total medications</p><strong>{medications.length}</strong></div>
         </article>
-        <article style={styles.summaryCard}>
-          <span style={styles.summaryLabel}>Active medications</span>
-          <strong style={styles.summaryValue}>{activeMedications}</strong>
+        <article className="summary-card">
+          <span className="summary-icon summary-icon-teal" aria-hidden="true">✓</span>
+          <div><p>Active</p><strong>{activeMedications}</strong></div>
         </article>
-        <article style={styles.summaryCard}>
-          <span style={styles.summaryLabel}>Taken today</span>
-          <strong style={styles.summaryValue}>{takenToday}</strong>
+        <article className="summary-card">
+          <span className="summary-icon summary-icon-violet" aria-hidden="true">●</span>
+          <div><p>Taken today</p><strong>{takenToday}</strong></div>
         </article>
-        <article style={styles.summaryCard}>
-          <span style={styles.summaryLabel}>Missed today</span>
-          <strong style={styles.summaryValue}>{missedToday}</strong>
+        <article className="summary-card">
+          <span className="summary-icon summary-icon-amber" aria-hidden="true">!</span>
+          <div><p>Missed or skipped</p><strong>{attentionToday}</strong></div>
         </article>
       </section>
 
-      <section style={styles.filterContainer}>
-        <input
-          type="search"
-          placeholder="Search by medication name..."
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          style={styles.searchInput}
-          aria-label="Search medications"
-        />
-
-        <select
-          value={statusFilter}
-          onChange={(event) =>
-            setStatusFilter(
-              event.target.value as MedicationStatusFilter,
-            )
-          }
-          style={styles.selectInput}
-          aria-label="Filter by lifecycle status"
-        >
-          <option value="ALL">All lifecycle statuses</option>
-          {medicationStatuses.map((status) => (
-            <option key={status} value={status}>
-              {formatStatus(status)}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={doseStatusFilter}
-          onChange={(event) =>
-            setDoseStatusFilter(
-              event.target.value as MedicationLogStatusFilter,
-            )
-          }
-          style={styles.selectInput}
-          aria-label="Filter by dose status"
-        >
-          <option value="ALL">All dose statuses</option>
-          {medicationLogStatuses.map((status) => (
-            <option key={status} value={status}>
-              {formatStatus(status)}
-            </option>
-          ))}
-        </select>
+      <section className="card filter-bar" aria-label="Medication filters">
+        <label className="search-field">
+          <span aria-hidden="true">⌕</span>
+          <span className="sr-only">Search medications</span>
+          <input
+            type="search"
+            placeholder="Search medication or dosage"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        </label>
+        <label className="compact-field">
+          <span className="sr-only">Filter lifecycle status</span>
+          <select
+            value={statusFilter}
+            onChange={(event) =>
+              setStatusFilter(event.target.value as MedicationStatusFilter)
+            }
+          >
+            <option value="ALL">All lifecycle statuses</option>
+            {medicationStatuses.map((status) => (
+              <option key={status} value={status}>{formatEnumLabel(status)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="compact-field">
+          <span className="sr-only">Filter today&apos;s dose status</span>
+          <select
+            value={doseStatusFilter}
+            onChange={(event) =>
+              setDoseStatusFilter(event.target.value as MedicationLogStatusFilter)
+            }
+          >
+            <option value="ALL">All dose statuses</option>
+            {medicationLogStatuses.map((status) => (
+              <option key={status} value={status}>{formatEnumLabel(status)}</option>
+            ))}
+          </select>
+        </label>
       </section>
 
-      {medications.length === 0 ? (
-        <p style={styles.centerMessage}>No medications found.</p>
+      {isLoading ? (
+        <section className="state-card" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          <h2>Loading medications</h2>
+          <p>We&apos;re retrieving your current treatment plan.</p>
+        </section>
+      ) : error ? (
+        <section className="state-card" role="alert">
+          <span className="state-icon" aria-hidden="true">!</span>
+          <h2>Medications unavailable</h2>
+          <p>{error}</p>
+          <button className="button button-primary" onClick={() => void refresh()}>
+            Try again
+          </button>
+        </section>
+      ) : medications.length === 0 ? (
+        <section className="state-card empty-state">
+          <span className="state-icon" aria-hidden="true">Rx</span>
+          <h2>No medications yet</h2>
+          <p>Add your first prescription to start tracking scheduled doses.</p>
+          <button className="button button-primary" onClick={openCreateForm}>
+            Add first medication
+          </button>
+        </section>
       ) : filteredMedications.length === 0 ? (
-        <p style={styles.centerMessage}>No matching medications.</p>
+        <section className="state-card empty-state">
+          <h2>No matching medications</h2>
+          <p>Adjust the search or filters to see more results.</p>
+          <button
+            className="button button-secondary"
+            onClick={() => {
+              setSearchTerm("");
+              setStatusFilter("ALL");
+              setDoseStatusFilter("ALL");
+            }}
+          >
+            Clear filters
+          </button>
+        </section>
       ) : (
-        <section style={styles.medicationGrid}>
+        <section className="medication-list" aria-label="Medication list">
           {filteredMedications.map((medication) => {
-            const schedule = getPrimarySchedule(medication);
-            const todaysLog = getTodaysMedicationLog(medication);
+            const medicationLogs = getTodaysMedicationLogs(medication);
+            const isMedicationBusy = mutationKey === `medication:${medication.id}`;
 
             return (
-              <article key={medication.id} style={styles.medicationCard}>
-                <div>
-                  <div style={styles.cardHeader}>
+              <article className="card medication-record" key={medication.id}>
+                <div className="medication-record-main">
+                  <div className="medication-title-row">
                     <div>
-                      <h2 style={styles.medicationName}>
-                        {medication.name}
-                      </h2>
-                      <p style={styles.dosage}>{medication.dosage}</p>
-                    </div>
-
-                    <div style={styles.badgeGroup}>
-                      <span
-                        style={getMedicationStatusBadgeStyle(
-                          medication.status,
-                        )}
-                      >
-                        {formatStatus(medication.status)}
-                      </span>
-                      {todaysLog && (
-                        <span
-                          style={getDoseStatusBadgeStyle(
-                            todaysLog.status,
-                          )}
-                        >
-                          {formatStatus(todaysLog.status)}
+                      <div className="badge-row">
+                        <span className={`badge badge-${medication.status.toLowerCase()}`}>
+                          {formatEnumLabel(medication.status)}
                         </span>
-                      )}
+                      </div>
+                      <h2>{medication.name}</h2>
+                      <p className="medication-dose">{medication.dosage}</p>
+                    </div>
+                    <div className="row-actions">
+                      <button className="button button-ghost button-small" type="button" disabled={mutationKey !== null} onClick={() => openEditForm(medication)}>
+                        Edit
+                      </button>
+                      <button className="button button-danger-ghost button-small" type="button" disabled={mutationKey !== null} onClick={() => void handleDelete(medication)}>
+                        {isMedicationBusy ? "Working…" : "Delete"}
+                      </button>
                     </div>
                   </div>
 
-                  <div style={styles.cardBody}>
-                    <p>
-                      <strong>Instructions:</strong>{" "}
-                      {medication.instructions ??
-                        "No instructions provided"}
-                    </p>
-                    <p>
-                      <strong>Time:</strong>{" "}
-                      {schedule?.scheduledTime ?? "Not scheduled"}
-                    </p>
-                    <p>
-                      <strong>Frequency:</strong>{" "}
-                      {schedule?.frequency ?? "Not specified"}
-                    </p>
-                    <p>
-                      <strong>Start date:</strong>{" "}
-                      {formatDate(medication.startDate)}
-                    </p>
-                    <p>
-                      <strong>End date:</strong>{" "}
-                      {formatDate(medication.endDate)}
-                    </p>
-                  </div>
-                </div>
+                  <dl className="detail-grid">
+                    <div>
+                      <dt>Schedule</dt>
+                      <dd>
+                        {medication.schedules.map((schedule) => (
+                          <span className="schedule-chip" key={schedule.id}>
+                            {schedule.scheduledTime}
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Treatment dates</dt>
+                      <dd>{formatDate(medication.startDate)} – {formatDate(medication.endDate)}</dd>
+                    </div>
+                    <div className="detail-wide">
+                      <dt>Instructions</dt>
+                      <dd>{medication.instructions || "No special instructions"}</dd>
+                    </div>
+                  </dl>
 
-                <div style={styles.cardActions}>
-                  <label style={styles.statusField}>
-                    Lifecycle
+                  <label className="lifecycle-control">
+                    <span>Lifecycle status</span>
                     <select
                       value={medication.status}
+                      disabled={mutationKey !== null}
                       onChange={(event) =>
-                        updateMedicationStatus(
-                          medication.id,
-                          event.target.value as MedicationStatus,
-                        )
+                        void updateMedication(medication.id, {
+                          status: event.target.value as MedicationStatus,
+                        })
                       }
-                      style={styles.compactSelect}
                     >
-                      {medicationStatuses.map((status) => (
-                        <option key={status} value={status}>
-                          {formatStatus(status)}
-                        </option>
-                      ))}
+                      {medicationStatuses
+                        .filter(
+                          (status) =>
+                            medication.status === "ACTIVE" || status !== "ACTIVE",
+                        )
+                        .map((status) => (
+                          <option key={status} value={status}>{formatEnumLabel(status)}</option>
+                        ))}
                     </select>
                   </label>
+                </div>
 
-                  {todaysLog && medication.status === "ACTIVE" && (
-                    <div style={styles.doseActions}>
-                      {medicationLogStatuses.map((status) => (
-                        <button
-                          key={status}
-                          type="button"
-                          style={{
-                            ...styles.actionButton,
-                            ...(todaysLog.status === status
-                              ? styles.selectedActionButton
-                              : {}),
-                          }}
-                          disabled={todaysLog.status === status}
-                          onClick={() =>
-                            updateMedicationLogStatus(
-                              medication.id,
-                              todaysLog.id,
-                              status,
-                            )
-                          }
-                        >
-                          {formatStatus(status)}
-                        </button>
+                <div className="dose-panel">
+                  <div className="dose-panel-heading">
+                    <div>
+                      <p className="eyebrow">Today</p>
+                      <h3>Scheduled doses</h3>
+                    </div>
+                    <span className="dose-count">{medicationLogs.length}</span>
+                  </div>
+
+                  {medicationLogs.length === 0 ? (
+                    <p className="muted-message">No dose logs are scheduled for today.</p>
+                  ) : (
+                    <div className="dose-list">
+                      {medicationLogs.map((log) => (
+                        <div className="dose-row" key={log.id}>
+                          <div className="dose-row-heading">
+                            <strong>
+                              {formatMedicationDoseTime(
+                                log.scheduledFor,
+                                medication.timeZone,
+                              )}
+                            </strong>
+                            <span className={`badge badge-${log.status.toLowerCase()}`}>
+                              {formatEnumLabel(log.status)}
+                            </span>
+                          </div>
+                          <div
+                            className="dose-actions"
+                            aria-label={`Set ${formatMedicationDoseTime(
+                              log.scheduledFor,
+                              medication.timeZone,
+                            )} dose status`}
+                          >
+                            {medicationLogStatuses.map((status) => (
+                              <button
+                                key={status}
+                                type="button"
+                                className={`dose-action dose-action-${status.toLowerCase()}${log.status === status ? " is-selected" : ""}`}
+                                disabled={mutationKey !== null || log.status === status}
+                                onClick={() =>
+                                  void updateMedicationLogStatus(
+                                    medication.id,
+                                    log.id,
+                                    status,
+                                  )
+                                }
+                              >
+                                {mutationKey === `log:${log.id}` ? "Saving…" : formatEnumLabel(status)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   )}
-
-                  <button
-                    type="button"
-                    style={styles.deleteButton}
-                    onClick={() =>
-                      handleDeleteMedication(medication)
-                    }
-                  >
-                    Delete
-                  </button>
                 </div>
               </article>
             );
@@ -520,197 +633,3 @@ export default function MedicationsPage() {
     </main>
   );
 }
-
-function getMedicationStatusBadgeStyle(status: MedicationStatus) {
-  const colors: Record<MedicationStatus, { background: string; color: string }> = {
-    ACTIVE: { background: "#dbeafe", color: "#1e40af" },
-    COMPLETED: { background: "#dcfce7", color: "#166534" },
-    CANCELLED: { background: "#fee2e2", color: "#991b1b" },
-  };
-
-  return { ...styles.badge, ...colors[status] };
-}
-
-function getDoseStatusBadgeStyle(status: MedicationLogStatus) {
-  const colors: Record<MedicationLogStatus, { background: string; color: string }> = {
-    PENDING: { background: "#fef9c3", color: "#854d0e" },
-    TAKEN: { background: "#dcfce7", color: "#166534" },
-    MISSED: { background: "#fee2e2", color: "#991b1b" },
-    SKIPPED: { background: "#f3f4f6", color: "#374151" },
-  };
-
-  return { ...styles.badge, ...colors[status] };
-}
-
-const styles = {
-  container: {
-    padding: "30px",
-    backgroundColor: "#0f172a",
-    minHeight: "100vh",
-    color: "#f8fafc",
-  },
-  headerRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "24px",
-    flexWrap: "wrap" as const,
-    gap: "15px",
-  },
-  title: { fontSize: "28px", fontWeight: "bold", margin: 0 },
-  subtitle: { fontSize: "14px", color: "#94a3b8", margin: "4px 0 0" },
-  addButton: {
-    padding: "10px 16px",
-    backgroundColor: "#38bdf8",
-    color: "#0f172a",
-    fontWeight: "bold",
-    border: "none",
-    borderRadius: "6px",
-    cursor: "pointer",
-  },
-  addForm: {
-    backgroundColor: "#1e293b",
-    border: "1px solid #334155",
-    borderRadius: "10px",
-    padding: "20px",
-    marginBottom: "24px",
-  },
-  formTitle: { margin: "0 0 16px" },
-  formError: { color: "#fecaca", margin: "0 0 16px" },
-  formGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: "14px",
-  },
-  field: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "6px",
-    color: "#cbd5e1",
-    fontSize: "13px",
-    fontWeight: "600",
-  },
-  fullWidthField: { gridColumn: "1 / -1" },
-  formActions: { display: "flex", gap: "10px", marginTop: "18px" },
-  summaryGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: "16px",
-    marginBottom: "24px",
-  },
-  summaryCard: {
-    backgroundColor: "#1e293b",
-    padding: "20px",
-    borderRadius: "8px",
-    display: "flex",
-    flexDirection: "column" as const,
-    border: "1px solid #334155",
-  },
-  summaryLabel: { fontSize: "13px", color: "#94a3b8", marginBottom: "8px" },
-  summaryValue: { fontSize: "24px", color: "#38bdf8" },
-  filterContainer: {
-    display: "flex",
-    gap: "12px",
-    marginBottom: "24px",
-    flexWrap: "wrap" as const,
-  },
-  searchInput: {
-    flex: 1,
-    minWidth: "180px",
-    padding: "10px 12px",
-    borderRadius: "6px",
-    border: "1px solid #475569",
-    backgroundColor: "#0f172a",
-    color: "#fff",
-    outline: "none",
-  },
-  selectInput: {
-    padding: "10px 12px",
-    borderRadius: "6px",
-    border: "1px solid #475569",
-    backgroundColor: "#1e293b",
-    color: "#fff",
-  },
-  medicationGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-    gap: "20px",
-  },
-  medicationCard: {
-    backgroundColor: "#1e293b",
-    borderRadius: "10px",
-    padding: "20px",
-    border: "1px solid #334155",
-    display: "flex",
-    flexDirection: "column" as const,
-    justifyContent: "space-between",
-  },
-  cardHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "12px",
-    marginBottom: "12px",
-  },
-  medicationName: { fontSize: "18px", margin: 0 },
-  dosage: { margin: "5px 0 0", color: "#94a3b8" },
-  badgeGroup: {
-    display: "flex",
-    gap: "6px",
-    flexDirection: "column" as const,
-    alignItems: "flex-end",
-  },
-  badge: {
-    padding: "4px 8px",
-    borderRadius: "4px",
-    fontSize: "12px",
-    fontWeight: "600",
-  },
-  cardBody: { fontSize: "14px", color: "#cbd5e1", lineHeight: "1.6" },
-  cardActions: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "10px",
-    borderTop: "1px solid #334155",
-    paddingTop: "12px",
-  },
-  statusField: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "10px",
-    color: "#cbd5e1",
-    fontSize: "13px",
-  },
-  compactSelect: {
-    padding: "6px 8px",
-    borderRadius: "4px",
-    border: "1px solid #475569",
-    backgroundColor: "#0f172a",
-    color: "#fff",
-  },
-  doseActions: { display: "flex", gap: "6px", flexWrap: "wrap" as const },
-  actionButton: {
-    padding: "7px 10px",
-    borderRadius: "4px",
-    border: "1px solid #475569",
-    backgroundColor: "#334155",
-    color: "#f8fafc",
-    cursor: "pointer",
-  },
-  selectedActionButton: { backgroundColor: "#0ea5e9", color: "#082f49" },
-  deleteButton: {
-    padding: "7px 10px",
-    borderRadius: "4px",
-    border: "1px solid #ef4444",
-    backgroundColor: "transparent",
-    color: "#fca5a5",
-    cursor: "pointer",
-    alignSelf: "flex-start",
-  },
-  centerMessage: {
-    textAlign: "center" as const,
-    padding: "40px",
-    color: "#94a3b8",
-  },
-};

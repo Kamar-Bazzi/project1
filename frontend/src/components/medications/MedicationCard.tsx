@@ -1,79 +1,80 @@
 import {
-  getPrimarySchedule,
-  getTodaysMedicationLog,
+  formatEnumLabel,
+  formatMedicationDoseTime,
+  getTodaysMedicationLogs,
   type Medication,
+  type MedicationLogStatus,
 } from "../../types/medication";
 
 interface MedicationCardProps {
   medication: Medication;
-  onMarkTaken: (
+  mutationKey: string | null;
+  onUpdateLogStatus: (
     medicationId: string,
     medicationLogId: string,
-  ) => void;
+    status: MedicationLogStatus,
+  ) => Promise<boolean>;
 }
 
 export default function MedicationCard({
   medication,
-  onMarkTaken,
+  mutationKey,
+  onUpdateLogStatus,
 }: MedicationCardProps) {
-  const schedule = getPrimarySchedule(medication);
-  const todaysLog = getTodaysMedicationLog(medication);
+  const logs = getTodaysMedicationLogs(medication);
 
   return (
-    <article className="medication-card">
+    <article className="card dashboard-medication-card">
       <div className="medication-card-header">
         <div>
           <h3>{medication.name}</h3>
-          <p className="medication-dosage">
-            {medication.dosage}
-          </p>
+          <p className="medication-dose">{medication.dosage}</p>
         </div>
-
-        <div>
-          <span
-            className={`status-badge medication-status-${medication.status.toLowerCase()}`}
-          >
-            {medication.status}
-          </span>{" "}
-          {todaysLog && (
-            <span
-              className={`status-badge status-${todaysLog.status.toLowerCase()}`}
-            >
-              {todaysLog.status}
-            </span>
-          )}
-        </div>
+        <span className={`badge badge-${medication.status.toLowerCase()}`}>
+          {formatEnumLabel(medication.status)}
+        </span>
       </div>
 
-      <div className="medication-information">
-        <p>
-          <strong>Time:</strong>{" "}
-          {schedule?.scheduledTime ?? "Not scheduled"}
-        </p>
+      <p className="medication-instructions">
+        {medication.instructions || "No special instructions"}
+      </p>
 
-        <p>
-          <strong>Frequency:</strong>{" "}
-          {schedule?.frequency ?? "Not specified"}
-        </p>
-
-        <p>
-          <strong>Instructions:</strong>{" "}
-          {medication.instructions ?? "No instructions provided"}
-        </p>
+      <div className="dashboard-dose-list">
+        {logs.map((log) => (
+          <div className="dashboard-dose" key={log.id}>
+            <div>
+              <strong>
+                {formatMedicationDoseTime(
+                  log.scheduledFor,
+                  medication.timeZone,
+                )}
+              </strong>
+              <span className={`badge badge-${log.status.toLowerCase()}`}>
+                {formatEnumLabel(log.status)}
+              </span>
+            </div>
+            <div className="dashboard-dose-actions">
+              {(["TAKEN", "MISSED", "SKIPPED"] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className={`button button-small ${
+                    status === "TAKEN" ? "button-primary" : "button-ghost"
+                  }`}
+                  disabled={mutationKey !== null || log.status === status}
+                  onClick={() =>
+                    void onUpdateLogStatus(medication.id, log.id, status)
+                  }
+                >
+                  {mutationKey === `log:${log.id}`
+                    ? "Saving…"
+                    : formatEnumLabel(status)}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
-
-      {medication.status === "ACTIVE" &&
-        todaysLog?.status === "PENDING" && (
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() =>
-              onMarkTaken(medication.id, todaysLog.id)
-            }
-          >
-            Mark as taken
-          </button>
-        )}
     </article>
   );
 }
