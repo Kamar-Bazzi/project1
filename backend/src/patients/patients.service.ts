@@ -75,6 +75,12 @@ export class PatientsService {
       throw new NotFoundException('Patient profile not found');
     }
 
+    await this.recordAudit(this.prisma, userId, 'MEDICAL_RECORD_ACCESSED', {
+      entity: 'Patient',
+      entityId: patient.id,
+      patientId: patient.id,
+      operation: 'PROFILE_READ',
+    });
     return this.toPatientProfile(patient);
   }
 
@@ -190,7 +196,39 @@ export class PatientsService {
         });
       }
 
+      await this.recordAudit(transaction, userId, 'ACCOUNT_PROFILE_UPDATED', {
+        entity: 'Patient',
+        entityId: patient.id,
+        patientId: patient.id,
+        operation: 'PROFILE_UPDATE',
+      });
       return this.toPatientProfile(patient);
+    });
+  }
+
+  private async recordAudit(
+    database: Pick<Prisma.TransactionClient, 'auditLog'>,
+    userId: string,
+    action: string,
+    details: {
+      entity: string;
+      entityId: string;
+      patientId: string;
+      operation: string;
+    },
+  ): Promise<void> {
+    if (!database.auditLog?.create) return;
+    await database.auditLog.create({
+      data: {
+        userId,
+        action,
+        entity: details.entity,
+        entityId: details.entityId,
+        metadata: {
+          patientId: details.patientId,
+          operation: details.operation,
+        },
+      },
     });
   }
 

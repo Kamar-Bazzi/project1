@@ -1,7 +1,8 @@
 import { ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Prisma, User, UserRole } from '@prisma/client';
+import { AccountStatus, Prisma, User, UserRole } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
@@ -25,6 +26,8 @@ interface CreateUserArguments {
 describe('AuthService', () => {
   let authService: AuthService;
   const findUniqueUser = jest.fn();
+  const signAsync = jest.fn();
+  const configGet = jest.fn();
   const createUser = jest.fn<Promise<User>, [CreateUserArguments]>();
   const registerDto: RegisterDto = {
     name: 'Test Patient',
@@ -35,6 +38,8 @@ describe('AuthService', () => {
   beforeEach(async () => {
     findUniqueUser.mockReset();
     createUser.mockReset();
+    signAsync.mockReset();
+    configGet.mockReset();
     findUniqueUser.mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
@@ -52,8 +57,12 @@ describe('AuthService', () => {
         {
           provide: JwtService,
           useValue: {
-            signAsync: jest.fn(),
+            signAsync,
           },
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: configGet },
         },
       ],
     }).compile();
@@ -113,4 +122,28 @@ describe('AuthService', () => {
       expect(persistedTimeZone).toBe(expectedTimeZone);
     },
   );
+
+  it('does not create an authenticated session before required email verification', async () => {
+    configGet.mockImplementation((key: string) =>
+      key === 'AUTH_REQUIRE_VERIFIED_EMAIL' ? 'true' : undefined,
+    );
+    createUser.mockResolvedValue({
+      id: 'user-1',
+      name: registerDto.name,
+      email: registerDto.email,
+      passwordHash: 'hashed-password',
+      role: UserRole.PATIENT,
+      accountStatus: AccountStatus.ACTIVE,
+      emailVerifiedAt: null,
+      passwordChangedAt: new Date(),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const result = await authService.register(registerDto);
+
+    expect(result).toHaveProperty('requiresEmailVerification', true);
+    expect(result.user.email).toBe(registerDto.email);
+    expect(signAsync).not.toHaveBeenCalled();
+  });
 });

@@ -38,10 +38,20 @@ export class MeasurementsService {
   async findAllForPatient(userId: string): Promise<Measurement[]> {
     const patientId = await this.getPatientId(userId);
 
-    return this.prisma.measurement.findMany({
+    const measurements = await this.prisma.measurement.findMany({
       where: { patientId },
       orderBy: [{ measuredAt: 'desc' }, { createdAt: 'desc' }],
     });
+    await this.recordAudit(
+      this.prisma,
+      userId,
+      'MEDICAL_RECORD_ACCESSED',
+      'Measurement',
+      undefined,
+      patientId,
+      { operation: 'LIST', resultCount: measurements.length },
+    );
+    return measurements;
   }
 
   async findOneForPatient(
@@ -60,6 +70,15 @@ export class MeasurementsService {
       throw new NotFoundException('Measurement not found');
     }
 
+    await this.recordAudit(
+      this.prisma,
+      userId,
+      'MEDICAL_RECORD_ACCESSED',
+      'Measurement',
+      measurement.id,
+      patientId,
+      { operation: 'READ' },
+    );
     return measurement;
   }
 
@@ -76,7 +95,7 @@ export class MeasurementsService {
     );
     this.assertCanonicalUnit(createDto.type, createDto.unit);
 
-    return this.prisma.measurement.create({
+    const measurement = await this.prisma.measurement.create({
       data: {
         patientId,
         type: createDto.type,
@@ -86,6 +105,16 @@ export class MeasurementsService {
         measuredAt: new Date(createDto.measuredAt),
       },
     });
+    await this.recordAudit(
+      this.prisma,
+      userId,
+      'MEASUREMENT_CREATED',
+      'Measurement',
+      measurement.id,
+      patientId,
+      { metricType: measurement.type },
+    );
+    return measurement;
   }
 
   async updateForPatient(
@@ -161,13 +190,23 @@ export class MeasurementsService {
         data.measuredAt = new Date(updateDto.measuredAt);
       }
 
-      return transaction.measurement.update({
+      const measurement = await transaction.measurement.update({
         where: {
           id: existingMeasurement.id,
           patientId,
         },
         data,
       });
+      await this.recordAudit(
+        transaction,
+        userId,
+        'MEASUREMENT_UPDATED',
+        'Measurement',
+        measurement.id,
+        patientId,
+        { metricType: measurement.type },
+      );
+      return measurement;
     });
   }
 
@@ -183,6 +222,35 @@ export class MeasurementsService {
     if (result.count === 0) {
       throw new NotFoundException('Measurement not found');
     }
+    await this.recordAudit(
+      this.prisma,
+      userId,
+      'MEASUREMENT_DELETED',
+      'Measurement',
+      measurementId,
+      patientId,
+    );
+  }
+
+  private async recordAudit(
+    database: Pick<Prisma.TransactionClient, 'auditLog'>,
+    userId: string,
+    action: string,
+    entity: string,
+    entityId: string | undefined,
+    patientId: string,
+    metadata: Prisma.InputJsonObject = {},
+  ): Promise<void> {
+    if (!database.auditLog?.create) return;
+    await database.auditLog.create({
+      data: {
+        userId,
+        action,
+        entity,
+        entityId,
+        metadata: { patientId, ...metadata },
+      },
+    });
   }
 
   private async getPatientId(userId: string): Promise<string> {

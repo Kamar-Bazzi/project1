@@ -1,8 +1,9 @@
 import { HealthAlertSeverity, HealthMetricType } from '@prisma/client';
 
-export type NotificationChannelName = 'IN_APP' | 'EMERGENCY_CONTACT';
+export type NotificationChannelName =
+  'IN_APP' | 'EMAIL' | 'PUSH' | 'EMERGENCY_CONTACT';
 export type NotificationOutcome =
-  'DELIVERED' | 'NOT_REQUESTED' | 'NOT_CONFIGURED' | 'DEFERRED';
+  'DELIVERED' | 'NOT_REQUESTED' | 'NOT_CONFIGURED' | 'DEFERRED' | 'FAILED';
 
 export interface HealthAlertNotification {
   alertId: string;

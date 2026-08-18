@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../../components/auth/auth-context";
 import HealthAlertsPanel from "../../components/health/HealthAlertsPanel";
+import HealthGoalsPanel from "../../components/goals/HealthGoalsPanel";
 import WearableHealthSection from "../../components/health/WearableHealthSection";
 import MedicationCard from "../../components/medications/MedicationCard";
+import NotificationsPanel from "../../components/notifications/NotificationsPanel";
 import { useMedications } from "../../services/use-medications";
 import { getTodaysMedicationLogs } from "../../types/medication";
 
@@ -48,14 +50,17 @@ export default function PatientDashboardPage() {
           <h1>{firstName}, here&apos;s your day.</h1>
           <p>Stay on top of your treatment and keep your care information current.</p>
         </div>
-        <div className="hero-date" aria-label="Today">
-          <span>{new Date().toLocaleDateString([], { weekday: "long" })}</span>
-          <strong>
-            {new Date().toLocaleDateString([], {
-              month: "short",
-              day: "numeric",
-            })}
-          </strong>
+        <div className="dashboard-hero-actions">
+          <Link className="emergency-quick-button" to="/emergency"><span aria-hidden="true">+</span>I feel unwell</Link>
+          <div className="hero-date" aria-label="Today">
+            <span>{new Date().toLocaleDateString([], { weekday: "long" })}</span>
+            <strong>
+              {new Date().toLocaleDateString([], {
+                month: "short",
+                day: "numeric",
+              })}
+            </strong>
+          </div>
         </div>
       </header>
 
@@ -133,6 +138,10 @@ export default function PatientDashboardPage() {
         </section>
 
         <aside className="dashboard-side-column">
+          <HealthGoalsPanel />
+
+          <NotificationsPanel />
+
           <HealthAlertsPanel compact />
 
           <section className="card quick-actions-card">
@@ -158,6 +167,16 @@ export default function PatientDashboardPage() {
             <Link className="quick-action" to="/wearables">
               <span className="quick-action-icon summary-icon-amber" aria-hidden="true">⌚</span>
               <span><strong>Manage wearables</strong><small>Connect and synchronize health devices</small></span>
+              <span aria-hidden="true">›</span>
+            </Link>
+            <Link className="quick-action" to="/history">
+              <span className="quick-action-icon summary-icon-blue" aria-hidden="true">H</span>
+              <span><strong>Review medical history</strong><small>One timeline for your complete care record</small></span>
+              <span aria-hidden="true">›</span>
+            </Link>
+            <Link className="quick-action" to="/reports">
+              <span className="quick-action-icon summary-icon-teal" aria-hidden="true">↗</span>
+              <span><strong>Open health reports</strong><small>View trends and download CSV or PDF</small></span>
               <span aria-hidden="true">›</span>
             </Link>
           </section>

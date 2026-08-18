@@ -108,6 +108,10 @@ export default function LoginPage() {
             {errors.password && <small id="login-password-error" className="field-error">{errors.password}</small>}
           </label>
 
+          <div className="auth-form-link">
+            <Link to="/forgot-password">Forgot your password?</Link>
+          </div>
+
           <button className="button button-primary button-large full-width" type="submit" disabled={isLoading}>
             {isLoading ? "Signing in…" : "Sign in"}
           </button>

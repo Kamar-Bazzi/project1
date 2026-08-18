@@ -19,7 +19,6 @@ import { getRoleHomePath } from "../../services/auth-routing";
 import {
   AUTH_UNAUTHORIZED_EVENT,
   clearAccessToken,
-  getAccessToken,
 } from "../../services/auth-storage";
 import {
   authService,
@@ -48,11 +47,16 @@ export default function ProtectedRoute({
     status: "loading",
   });
 
-  const logout = useCallback(() => {
+  const endLocalSession = useCallback(() => {
     clearAccessToken();
     setAuthState({ status: "unauthenticated" });
     navigate("/login", { replace: true });
   }, [navigate]);
+
+  const logout = useCallback(() => {
+    void authService.logout().catch(() => undefined);
+    endLocalSession();
+  }, [endLocalSession]);
 
   const refreshUser = useCallback(async (): Promise<void> => {
     const user = await authService.me();
@@ -60,22 +64,17 @@ export default function ProtectedRoute({
   }, []);
 
   useEffect(() => {
-    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, logout);
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, endLocalSession);
 
     return () => {
-      window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, logout);
+      window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, endLocalSession);
     };
-  }, [logout]);
+  }, [endLocalSession]);
 
   useEffect(() => {
     let isCancelled = false;
 
     async function validateSession(): Promise<void> {
-      if (!getAccessToken()) {
-        setAuthState({ status: "unauthenticated" });
-        return;
-      }
-
       setAuthState({ status: "loading" });
 
       try {
@@ -200,15 +199,27 @@ function SessionHeader({ user, onLogout }: SessionHeaderProps) {
   const patientLinks = [
     { to: "/dashboard", label: "Dashboard" },
     { to: "/medications", label: "Medications" },
+    { to: "/appointments", label: "Appointments" },
+    { to: "/history", label: "History" },
+    { to: "/reports", label: "Reports" },
+    { to: "/emergency", label: "I feel unwell" },
+  ];
+  const patientMoreLinks = [
     { to: "/measurements", label: "Measurements" },
-    { to: "/health", label: "Health" },
+    { to: "/health", label: "Health & alerts" },
+    { to: "/goals", label: "Health goals" },
     { to: "/wearables", label: "Wearables" },
     { to: "/profile", label: "Profile" },
+    { to: "/notifications", label: "Notifications" },
+    { to: "/security", label: "Security" },
   ];
-  const links =
-    user.role === "PATIENT"
-      ? patientLinks
-      : [{ to: homePath, label: "Dashboard" }];
+  const links = user.role === "PATIENT"
+    ? patientLinks
+    : [
+        { to: homePath, label: "Dashboard" },
+        { to: "/notifications", label: "Notifications" },
+        { to: "/security", label: "Security" },
+      ];
 
   return (
     <header className="app-header">
@@ -251,6 +262,25 @@ function SessionHeader({ user, onLogout }: SessionHeaderProps) {
                 {link.label}
               </NavLink>
             ))}
+            {user.role === "PATIENT" && (
+              <details className="navigation-more">
+                <summary className="app-navigation-link">More</summary>
+                <div className="navigation-more-menu">
+                  {patientMoreLinks.map((link) => (
+                    <NavLink
+                      key={link.to}
+                      to={link.to}
+                      onClick={() => setIsOpen(false)}
+                      className={({ isActive }) =>
+                        `app-navigation-link${isActive ? " is-active" : ""}`
+                      }
+                    >
+                      {link.label}
+                    </NavLink>
+                  ))}
+                </div>
+              </details>
+            )}
           </nav>
 
           <div className="auth-session-identity">

@@ -1,18 +1,34 @@
-const ACCESS_TOKEN_STORAGE_KEY = "accessToken";
+const ACCESS_TOKEN_STORAGE_KEY = "caretrack.accessToken";
+const LEGACY_ACCESS_TOKEN_STORAGE_KEY = "accessToken";
 
 export const AUTH_UNAUTHORIZED_EVENT =
   "medical-tracking:unauthorized";
 
 export function getAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+  const accessToken = sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+
+  if (accessToken) return accessToken;
+
+  const legacyAccessToken = localStorage.getItem(
+    LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+  );
+
+  if (legacyAccessToken) {
+    sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, legacyAccessToken);
+    localStorage.removeItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY);
+  }
+
+  return legacyAccessToken;
 }
 
 export function setAccessToken(accessToken: string): void {
-  localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+  sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+  localStorage.removeItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY);
 }
 
 export function clearAccessToken(): void {
-  localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY);
 }
 
 export function notifyUnauthorized(): void {

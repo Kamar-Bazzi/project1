@@ -2,5 +2,12 @@ node_modules/
 dist/
 .env
 .env.local
+.env.production
+.env.production.local
 backend/.env
 frontend/.env.local
+
+# Production TLS material and database backups
+deploy/certs/*.pem
+deploy/certs/*.key
+deploy/backups/

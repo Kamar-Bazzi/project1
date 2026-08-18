@@ -63,7 +63,8 @@ Health Connect ingestion requires an iOS or Android companion application;
 Fitbit, Garmin, Samsung, and other providers require a supported native SDK or
 provider API authorization. See [Wearable Health Architecture](wearable-health.md).
 
-Wearable health is patient-private. Doctors receive no implicit access from
-their role or from the existence of an appointment. A future doctor view must
-require an active, explicit `DoctorPatientAccess` assignment for every patient
-and every object read.
+Wearable health is patient-private by default. Doctors receive no implicit
+access from their role or from the existence of an appointment. The doctor
+dashboard and patient detail APIs require an active, explicit
+`DoctorPatientAccess` assignment in every patient-scoped query; revocation
+removes subsequent access immediately.

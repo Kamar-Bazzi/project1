@@ -1,4 +1,9 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  ServiceUnavailableException,
+  UseGuards,
+} from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 
 import { Roles } from './auth/decorators/roles.decorator';
@@ -15,6 +20,23 @@ export class AppController {
     return {
       message: 'Medical Tracking API is running',
     };
+  }
+
+  @Get('health')
+  async getHealth() {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      return {
+        status: 'ok',
+        database: 'up',
+        timestamp: new Date().toISOString(),
+      };
+    } catch {
+      throw new ServiceUnavailableException({
+        status: 'unavailable',
+        database: 'down',
+      });
+    }
   }
 
   @Get('database-check')

@@ -5,9 +5,11 @@ import { PrismaService } from './prisma/prisma.service';
 describe('AppController', () => {
   let appController: AppController;
   const countUsers = jest.fn();
+  const queryRaw = jest.fn();
 
   beforeEach(async () => {
     countUsers.mockReset();
+    queryRaw.mockReset();
 
     const app: TestingModule = await Test.createTestingModule({
       controllers: [AppController],
@@ -15,6 +17,7 @@ describe('AppController', () => {
         {
           provide: PrismaService,
           useValue: {
+            $queryRaw: queryRaw,
             user: {
               count: countUsers,
             },
@@ -24,6 +27,24 @@ describe('AppController', () => {
     }).compile();
 
     appController = app.get<AppController>(AppController);
+  });
+
+  describe('health', () => {
+    it('reports database readiness without exposing record counts', async () => {
+      queryRaw.mockResolvedValue([{ '?column?': 1 }]);
+
+      await expect(appController.getHealth()).resolves.toEqual(
+        expect.objectContaining({ status: 'ok', database: 'up' }),
+      );
+    });
+
+    it('returns an unavailable error when PostgreSQL cannot be reached', async () => {
+      queryRaw.mockRejectedValue(new Error('connection refused'));
+
+      await expect(appController.getHealth()).rejects.toMatchObject({
+        status: 503,
+      });
+    });
   });
 
   describe('root', () => {

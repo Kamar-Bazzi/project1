@@ -115,15 +115,17 @@ watch reading cannot trigger a rule because
 `consecutiveReadingsRequired` is at least 2 and defaults to 3.
 
 Patients may acknowledge and resolve their alerts. Emergency contacts are
-notified only if a future outbound channel is configured, the contact is
-active, and the patient explicitly enabled contact notification for that rule.
-The application never calls emergency services.
+notified by email only when SMTP is configured, the contact is active with an
+email address, and the patient explicitly enabled contact notification for
+that rule. Contact messages omit measurement values and the application never
+calls emergency services.
 
-The notification layer is channel-based. The current implementation supports
-persisted in-app alerts only. It does not pretend to send email, SMS, or push
-messages. A future email/SMS/push channel must read credentials from backend
-environment variables, avoid logging message contents or secrets, and include
-delivery/retry tests.
+The notification layer persists in-app alerts and delivery state, sends email
+through the configured SMTP provider, and sends browser notifications through
+VAPID-authenticated web push. Failed email/push delivery can be claimed again
+up to five attempts; expired push subscriptions are revoked. Provider
+credentials and private keys come only from backend environment variables.
+SMS is not implemented.
 
 ## Security controls
 

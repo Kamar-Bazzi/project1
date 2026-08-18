@@ -136,9 +136,12 @@ and `RESOLVED` states.
 - `DELETE /emergency-contacts/:id`
 
 Contacts contain name, relationship, phone, optional email, and active state.
-No endpoint calls emergency services. The current notification channel is
-in-app only.
+No endpoint calls emergency services. Health alerts are persisted in-app and
+can also use web push; when the patient explicitly opts in for an alert rule,
+active emergency contacts with email addresses are notified through the
+configured SMTP provider. Messages deliberately omit measurement values.
 
 All IDs above are object-level authorized. A foreign patient's resource is
-reported as not found. Doctor wearable endpoints remain disabled until an
-active `DoctorPatientAccess` grant can be enforced.
+reported as not found. Doctor clinical views are available only through the
+dedicated `/doctor` API and require an active `DoctorPatientAccess` grant in
+every patient-scoped query. Revoked or absent grants return not found.

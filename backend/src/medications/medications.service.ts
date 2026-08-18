@@ -67,6 +67,54 @@ export class MedicationsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Materializes today's schedule rows so reminders do not depend on a patient
+   * opening the medications screen. Schedule/date identity makes this safe
+   * when more than one application instance runs the worker. */
+  async prepareReminderLogs(now = new Date()): Promise<void> {
+    const patients = await this.prisma.patient.findMany({
+      where: {
+        timeZone: { not: null },
+        medications: { some: { status: MedicationStatus.ACTIVE } },
+      },
+      select: {
+        id: true,
+        timeZone: true,
+        medications: {
+          where: { status: MedicationStatus.ACTIVE },
+          select: {
+            id: true,
+            status: true,
+            startDate: true,
+            endDate: true,
+            schedules: {
+              select: { id: true, scheduledTime: true, createdAt: true },
+            },
+          },
+        },
+      },
+    });
+
+    for (const patient of patients) {
+      if (!patient.timeZone) {
+        continue;
+      }
+
+      const timeZone = this.canonicalTimeZone(patient.timeZone);
+      const today = this.getZonedDay(timeZone, now);
+
+      await this.runSerializableTransaction((transaction) =>
+        this.ensureTodaysLogs(
+          transaction,
+          patient.id,
+          patient.medications,
+          timeZone,
+          today,
+          true,
+        ),
+      );
+    }
+  }
+
   async findAll(userId: string, requestedTimeZone?: string) {
     const validRequestedTimeZone =
       this.resolveRequestedTimeZone(requestedTimeZone);
@@ -111,6 +159,11 @@ export class MedicationsService {
         orderBy: { createdAt: 'desc' },
       });
 
+      await this.recordAudit(transaction, userId, 'MEDICAL_RECORD_ACCESSED', {
+        entity: 'Medication',
+        patientId,
+        metadata: { resultCount: responses.length, operation: 'LIST' },
+      });
       return responses.map((response) =>
         this.withTimeZone(response, patient.timeZone),
       );
@@ -178,6 +231,12 @@ export class MedicationsService {
         throw new NotFoundException('Medication not found');
       }
 
+      await this.recordAudit(transaction, userId, 'MEDICAL_RECORD_ACCESSED', {
+        entity: 'Medication',
+        entityId: response.id,
+        patientId,
+        metadata: { operation: 'READ' },
+      });
       return this.withTimeZone(response, patient.timeZone);
     });
   }
@@ -260,6 +319,11 @@ export class MedicationsService {
         throw new NotFoundException('Medication not found');
       }
 
+      await this.recordAudit(transaction, userId, 'MEDICATION_CREATED', {
+        entity: 'Medication',
+        entityId: response.id,
+        patientId,
+      });
       return this.withTimeZone(response, patient.timeZone);
     });
   }
@@ -473,6 +537,12 @@ export class MedicationsService {
         throw new NotFoundException('Medication not found');
       }
 
+      await this.recordAudit(transaction, userId, 'MEDICATION_UPDATED', {
+        entity: 'Medication',
+        entityId: response.id,
+        patientId,
+        metadata: { status: response.status },
+      });
       return this.withTimeZone(response, patient.timeZone);
     });
   }
@@ -490,6 +560,11 @@ export class MedicationsService {
       if (result.count === 0) {
         throw new NotFoundException('Medication not found');
       }
+      await this.recordAudit(transaction, userId, 'MEDICATION_DELETED', {
+        entity: 'Medication',
+        entityId: medicationId,
+        patientId,
+      });
     });
   }
 
@@ -513,7 +588,7 @@ export class MedicationsService {
         throw new NotFoundException('Medication log not found');
       }
 
-      return transaction.medicationLog.update({
+      const updated = await transaction.medicationLog.update({
         where: {
           id: logId,
           medicationId,
@@ -527,6 +602,36 @@ export class MedicationsService {
               : null,
         },
       });
+      await this.recordAudit(transaction, userId, 'MEDICATION_LOG_UPDATED', {
+        entity: 'MedicationLog',
+        entityId: logId,
+        patientId,
+        metadata: { status: updated.status },
+      });
+      return updated;
+    });
+  }
+
+  private async recordAudit(
+    database: Pick<Prisma.TransactionClient, 'auditLog'>,
+    userId: string,
+    action: string,
+    details: {
+      entity: string;
+      entityId?: string;
+      patientId: string;
+      metadata?: Prisma.InputJsonObject;
+    },
+  ): Promise<void> {
+    if (!database.auditLog?.create) return;
+    await database.auditLog.create({
+      data: {
+        userId,
+        action,
+        entity: details.entity,
+        entityId: details.entityId,
+        metadata: { patientId: details.patientId, ...details.metadata },
+      },
     });
   }
 

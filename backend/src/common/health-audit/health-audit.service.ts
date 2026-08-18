@@ -17,7 +17,15 @@ type AuditDatabaseClient = Pick<Prisma.TransactionClient, 'auditLog'>;
 
 const ALLOWED_METADATA_KEYS = new Set([
   'patientId',
+  'doctorId',
+  'appointmentId',
+  'goalId',
+  'progressId',
+  'emergencyEventId',
   'metricType',
+  'noteCategory',
+  'goalMetric',
+  'goalStatus',
   'status',
   'count',
   'resultCount',
@@ -37,6 +45,10 @@ const ALLOWED_METADATA_KEYS = new Set([
   'contactCount',
   'enabled',
   'severity',
+  'periodDays',
+  'dataset',
+  'format',
+  'timelineTypes',
 ]);
 
 /**

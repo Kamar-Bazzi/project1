@@ -3,7 +3,7 @@ import 'reflect-metadata';
 import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
-import { HealthMetricType, UserRole } from '@prisma/client';
+import { AccountStatus, HealthMetricType, UserRole } from '@prisma/client';
 import request from 'supertest';
 import { App } from 'supertest/types';
 
@@ -17,6 +17,7 @@ describe('Wearable health security and validation (e2e)', () => {
   let patientToken: string;
   let doctorToken: string;
   const originalJwtSecret = process.env.JWT_SECRET;
+  const originalSwaggerEnabled = process.env.SWAGGER_ENABLED;
   const testJwtSecret = 'wearable-e2e-test-only-secret-value';
   const deviceId = '11aa22bb-33cc-44dd-88ee-112233445566';
   const syncForPatient = jest.fn();
@@ -25,6 +26,7 @@ describe('Wearable health security and validation (e2e)', () => {
 
   beforeAll(async () => {
     process.env.JWT_SECRET = testJwtSecret;
+    process.env.SWAGGER_ENABLED = 'false';
 
     const prisma = {
       user: {
@@ -39,6 +41,9 @@ describe('Wearable health security and validation (e2e)', () => {
                 : 'patient@example.com',
             role:
               where.id === 'doctor-user' ? UserRole.DOCTOR : UserRole.PATIENT,
+            accountStatus: AccountStatus.ACTIVE,
+            emailVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+            passwordChangedAt: null,
             createdAt: new Date('2026-01-01T00:00:00.000Z'),
           }),
         ),
@@ -260,6 +265,12 @@ describe('Wearable health security and validation (e2e)', () => {
       delete process.env.JWT_SECRET;
     } else {
       process.env.JWT_SECRET = originalJwtSecret;
+    }
+
+    if (originalSwaggerEnabled === undefined) {
+      delete process.env.SWAGGER_ENABLED;
+    } else {
+      process.env.SWAGGER_ENABLED = originalSwaggerEnabled;
     }
   });
 });

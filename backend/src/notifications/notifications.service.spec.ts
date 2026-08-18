@@ -81,4 +81,67 @@ describe('NotificationsService', () => {
       where: { patientId: 'patient-1', active: true },
     });
   });
+
+  it('rejects untrusted push endpoints before they can be used for SSRF', async () => {
+    await expect(
+      service.savePushSubscription('user-1', {
+        endpoint: 'https://127.0.0.1/internal-callback',
+        p256dh: 'public-key-material',
+        auth: 'auth-material',
+      }),
+    ).rejects.toThrow('Push subscription provider is not allowed');
+  });
+
+  it('creates a complete default notification preference record', async () => {
+    const preference = {
+      id: 'preference-1',
+      userId: 'user-1',
+      inAppEnabled: true,
+      emailEnabled: true,
+      pushEnabled: true,
+      medicationReminders: true,
+      appointmentReminders: true,
+      healthAlerts: true,
+      emergencyContactAlerts: true,
+      securityAlerts: true,
+      appointmentReminderHours: 24,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const upsert = jest.fn().mockResolvedValue(preference);
+    const preferenceService = new NotificationsService(
+      {
+        notificationPreference: { upsert },
+      } as unknown as PrismaService,
+      channel,
+    );
+
+    await expect(preferenceService.getPreferences('user-1')).resolves.toEqual({
+      inAppEnabled: true,
+      emailEnabled: true,
+      pushEnabled: true,
+      medicationReminders: true,
+      appointmentReminders: true,
+      healthAlerts: true,
+      emergencyContactAlerts: true,
+      securityAlerts: true,
+      appointmentReminderHours: 24,
+    });
+    expect(upsert).toHaveBeenCalledWith({
+      where: { userId: 'user-1' },
+      update: {},
+      create: { userId: 'user-1' },
+    });
+  });
+
+  it('rejects an empty notification preference update', async () => {
+    const preferenceService = new NotificationsService(
+      {} as PrismaService,
+      channel,
+    );
+
+    await expect(
+      preferenceService.updatePreferences('user-1', {}),
+    ).rejects.toThrow('At least one notification preference is required');
+  });
 });
