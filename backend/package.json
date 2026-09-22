@@ -20,6 +20,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:security": "jest --config ./test/jest-e2e.json --runInBand test/security.e2e-spec.ts",
+    "seed:uat": "node scripts/seed-uat-accounts.mjs",
     "verify:production": "node scripts/verify-production-env.mjs",
     "verify:backup-restore": "node ../deploy/postgres/verify-fresh-postgres.mjs"
   },

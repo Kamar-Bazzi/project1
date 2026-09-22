@@ -243,8 +243,19 @@ function SessionHeader({ user, onLogout }: SessionHeaderProps) {
     { to: "/security", label: t("navigation.security") },
     { to: "/privacy", label: t("navigation.privacy") },
   ];
+  const doctorLinks = [
+    { to: "/doctor", label: t("navigation.dashboard") },
+    { to: "/doctor/patients", label: t("navigation.patients") },
+    { to: "/doctor/appointments", label: t("navigation.appointments") },
+    { to: "/doctor/monitoring", label: t("navigation.monitoring") },
+    { to: "/doctor/availability", label: t("navigation.availability") },
+    { to: "/notifications", label: t("navigation.notifications") },
+    { to: "/security", label: t("navigation.security") },
+  ];
   const links = user.role === "PATIENT"
     ? patientLinks
+    : user.role === "DOCTOR"
+      ? doctorLinks
     : [
         { to: homePath, label: t("navigation.dashboard") },
         { to: "/notifications", label: t("navigation.notifications") },

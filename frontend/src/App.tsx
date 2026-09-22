@@ -13,7 +13,12 @@ import RegisterPage from "./pages/auth/RegisterPage";
 import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
 import SecurityPage from "./pages/auth/SecurityPage";
 import VerifyEmailPage from "./pages/auth/VerifyEmailPage";
+import DoctorAppointmentsPage from "./pages/doctor/DoctorAppointmentsPage";
+import DoctorAvailabilityPage from "./pages/doctor/DoctorAvailabilityPage";
 import DoctorDashboardPage from "./pages/doctor/DoctorDashboardPage";
+import DoctorMonitoringPage from "./pages/doctor/DoctorMonitoringPage";
+import DoctorPatientDetailsPage from "./pages/doctor/DoctorPatientDetailsPage";
+import DoctorPatientsPage from "./pages/doctor/DoctorPatientsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import MedicationsPage from "./pages/MedicationsPage";
 import MeasurementsPage from "./pages/MeasurementsPage";
@@ -98,6 +103,26 @@ export default function App() {
           <Route
             path="/doctor"
             element={<DoctorDashboardPage />}
+          />
+          <Route
+            path="/doctor/patients"
+            element={<DoctorPatientsPage />}
+          />
+          <Route
+            path="/doctor/patients/:patientId"
+            element={<DoctorPatientDetailsPage />}
+          />
+          <Route
+            path="/doctor/appointments"
+            element={<DoctorAppointmentsPage />}
+          />
+          <Route
+            path="/doctor/monitoring"
+            element={<DoctorMonitoringPage />}
+          />
+          <Route
+            path="/doctor/availability"
+            element={<DoctorAvailabilityPage />}
           />
         </Route>
 

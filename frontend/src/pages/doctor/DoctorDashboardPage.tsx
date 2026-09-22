@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { getApiErrorMessage } from "../../services/api-error";
 import DoctorCareNotesPanel from "../../components/doctor/DoctorCareNotesPanel";
 import DoctorDocumentsPanel from "../../components/doctor/DoctorDocumentsPanel";
@@ -211,6 +211,20 @@ export default function DoctorDashboardPage() {
         <SummaryCard label="Upcoming visits" value={dashboard.summary.upcomingAppointments} icon="Cal" tone="teal" />
         <SummaryCard label="Missed doses · 24h" value={dashboard.summary.missedMedicationDoses ?? 0} icon="Rx!" tone="amber" />
         <SummaryCard label="Patients needing attention" value={dashboard.summary.patientsNeedingAttention ?? 0} icon="P!" tone="violet" />
+      </section>
+
+      <section className="card data-section">
+        <div className="section-heading section-heading-actions">
+          <div>
+            <p className="eyebrow">Quick links</p>
+            <h2>Doctor workspace</h2>
+          </div>
+          <div className="row-actions">
+            <Link className="button button-secondary button-small" to="/doctor/patients">Patients</Link>
+            <Link className="button button-secondary button-small" to="/doctor/monitoring">Monitoring</Link>
+            <Link className="button button-secondary button-small" to="/doctor/appointments">Appointments</Link>
+          </div>
+        </div>
       </section>
 
       <DoctorAttentionPanel dashboard={dashboard} onOpenPatient={openPatient} />

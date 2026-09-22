@@ -11,6 +11,16 @@ import type {
   MedicationStatus,
 } from "./medication";
 import type { Measurement, MeasurementType } from "./measurement";
+import type {
+  DoctorFollowUp,
+  DoctorMonitoringOverview,
+  DoctorNote,
+  HealthGoal,
+  MedicalHistoryResponse,
+  PatientMonitoringReport,
+} from "./care";
+import type { FollowUpPlan } from "./follow-up-plan";
+import type { PatientDocument } from "./patient-document";
 
 export interface DoctorPatientUser {
   id: string;
@@ -151,6 +161,67 @@ export interface DoctorDashboard {
     }>;
   }>;
 }
+
+export type DoctorPatient = DoctorPatientSummary;
+export type DoctorPatientDetail = DoctorPatientRecord;
+export type DoctorAlert = DoctorHealthAlert;
+export type DoctorMonitoring = DoctorMonitoringOverview;
+export type ClinicalNote = DoctorNote;
+export type FollowUp = DoctorFollowUp;
+export type DoctorPatientGoal = HealthGoal;
+export type PatientDocumentForDoctor = PatientDocument;
+
+export interface DoctorAvailabilityWindow {
+  id?: string;
+  dayOfWeek: number;
+  startMinute: number;
+  endMinute: number;
+}
+
+export interface DoctorAvailability {
+  id: string;
+  userId: string;
+  timeZone: string;
+  slotDurationMinutes: number;
+  availabilityWindows: DoctorAvailabilityWindow[];
+}
+
+export interface UpdateDoctorAvailabilityInput {
+  timeZone: string;
+  slotDurationMinutes: number;
+  windows: DoctorAvailabilityWindow[];
+}
+
+export interface DoctorPatientSymptom {
+  id: string;
+  patientId: string;
+  name: string;
+  severity: number;
+  occurredAt: string;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DoctorCheckIn {
+  id: string;
+  patientId: string;
+  localDate: string;
+  timeZone: string;
+  mood: number;
+  painLevel: number;
+  sleepQuality: number;
+  symptoms: string[];
+  notes: string | null;
+  activityMinutes: number;
+  medicationAdherence: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DoctorPatientMedicalHistory = MedicalHistoryResponse;
+export type DoctorPatientMonitoring = PatientMonitoringReport;
+export type DoctorFollowUpPlan = FollowUpPlan;
 
 export interface DoctorPatientRecord {
   id: string;

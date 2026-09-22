@@ -11,6 +11,20 @@ export function isUnauthorizedApiError(error: unknown): boolean {
   );
 }
 
+export function isForbiddenApiError(error: unknown): boolean {
+  return (
+    axios.isAxiosError(error) &&
+    error.response?.status === 403
+  );
+}
+
+export function isNotFoundApiError(error: unknown): boolean {
+  return (
+    axios.isAxiosError(error) &&
+    error.response?.status === 404
+  );
+}
+
 export function getApiErrorMessage(
   error: unknown,
   fallbackMessage: string,
