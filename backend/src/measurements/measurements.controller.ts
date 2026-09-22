@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateMeasurementDto } from './dto/create-measurement.dto';
+import { MeasurementQueryDto } from './dto/measurement-query.dto';
 import { UpdateMeasurementDto } from './dto/update-measurement.dto';
 import { MeasurementsService } from './measurements.service';
 
@@ -38,6 +40,14 @@ export class MeasurementsController {
   @Get()
   findAll(@Req() request: AuthenticatedPatientRequest) {
     return this.measurementsService.findAllForPatient(request.user.id);
+  }
+
+  @Get('paged')
+  findPage(
+    @Req() request: AuthenticatedPatientRequest,
+    @Query() query: MeasurementQueryDto,
+  ) {
+    return this.measurementsService.findPageForPatient(request.user.id, query);
   }
 
   @Get(':id')

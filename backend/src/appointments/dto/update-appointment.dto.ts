@@ -1,15 +1,17 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { AppointmentStatus } from '@prisma/client';
 import {
   IsDateString,
   IsEnum,
+  IsInt,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateIf,
 } from 'class-validator';
-
 import { ISO_TIME_ZONE_SUFFIX_PATTERN } from './appointment-date-validation';
 
 function trimNullableString(value: unknown): unknown {
@@ -34,6 +36,13 @@ export class UpdateAppointmentDto {
     typeof value === 'string' ? value.trim() : value,
   )
   appointmentDate?: string;
+
+  @ValidateIf((_object, value: unknown) => value !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(5)
+  @Max(480)
+  durationMinutes?: number;
 
   @ValidateIf((_object, value: unknown) => value !== undefined)
   @IsEnum(AppointmentStatus)

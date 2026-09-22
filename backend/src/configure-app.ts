@@ -135,6 +135,11 @@ export function configureApp(app: INestApplication): void {
       .addTag('doctor', 'Explicitly assigned patient information')
       .addTag('admin', 'Account, assignment, and audit administration')
       .addTag('notifications', 'In-app, email, and web-push notifications')
+      .addTag('wellness', 'Transparent, non-diagnostic wellness summaries')
+      .addTag('symptoms', 'Patient-recorded symptom observations')
+      .addTag('check-ins', 'Daily patient health check-ins')
+      .addTag('documents', 'Private, role-scoped patient documents')
+      .addTag('follow-ups', 'Doctor follow-up plans and tasks')
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     decorateOpenApiDocument(document);
@@ -274,6 +279,11 @@ function openApiTagForPath(path: string): string {
   if (path.includes('/appointments')) return 'appointments';
   if (path.includes('/notifications')) return 'notifications';
   if (path.includes('/medications')) return 'medications';
+  if (path.includes('/wellness')) return 'wellness';
+  if (path.includes('/symptoms')) return 'symptoms';
+  if (path.includes('/check-ins')) return 'check-ins';
+  if (path.includes('/documents')) return 'documents';
+  if (path.includes('/follow-up-plans')) return 'follow-ups';
   if (path.includes('/measurements')) return 'measurements';
   if (path.includes('/wearables') || path.includes('/health-metrics')) {
     return 'wearables';
@@ -649,6 +659,10 @@ const OPENAPI_PROPERTY_DESCRIPTIONS: Record<string, string> = {
   doctorId: 'UUID of the doctor profile in the caller permitted scope.',
   appointmentId: 'UUID of the role-scoped appointment.',
   medicationId: 'UUID of the current patient owned medication.',
+  symptomId: 'UUID of the symptom entry in the caller permitted scope.',
+  documentId: 'UUID of the private document in the caller permitted scope.',
+  planId: 'UUID of the follow-up plan in the caller permitted scope.',
+  taskId: 'UUID of the task in the caller permitted follow-up plan.',
   notificationId: 'UUID of the current user owned notification.',
   sessionId: 'UUID of the current user owned authentication session.',
   goalId: 'UUID of the health goal in the caller permitted scope.',

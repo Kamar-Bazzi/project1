@@ -123,7 +123,7 @@ export class HealthAlertEvaluatorService {
         metadata: {
           patientId: metric.patientId,
           metricType: metric.metricType,
-          severity: rule.severity,
+          alertSeverity: rule.severity,
           notificationChannel: 'IN_APP',
           notificationOutcome: 'DELIVERED',
           contactCount: emergencyContactResult?.recipientCount ?? 0,

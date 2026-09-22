@@ -3,10 +3,12 @@ import api from "./api";
 export type NotificationType =
   | "MEDICATION_REMINDER"
   | "MEDICATION_OVERDUE"
+  | "MEDICATION_REFILL_LOW"
   | "APPOINTMENT_REMINDER"
   | "HEALTH_ALERT"
   | "EMERGENCY_ALERT"
   | "SECURITY_ALERT"
+  | "WEARABLE_SYNC_STALE"
   | "SYSTEM";
 
 export interface CareNotification {
@@ -21,12 +23,19 @@ export interface CareNotification {
 export interface NotificationList {
   items: CareNotification[];
   unreadCount: number;
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 export interface NotificationPreferences {
   inAppEnabled: boolean;
   emailEnabled: boolean;
   pushEnabled: boolean;
+  smsEnabled: boolean;
   medicationReminders: boolean;
   appointmentReminders: boolean;
   healthAlerts: boolean;
@@ -36,9 +45,14 @@ export interface NotificationPreferences {
 }
 
 export const notificationService = {
-  async list(limit = 20, unreadOnly = false): Promise<NotificationList> {
+  async list(
+    limit = 20,
+    unreadOnly = false,
+    page = 1,
+    type?: NotificationType,
+  ): Promise<NotificationList> {
     const response = await api.get<NotificationList>("/notifications", {
-      params: { limit, unreadOnly },
+      params: { limit, unreadOnly, page, type },
     });
     return response.data;
   },

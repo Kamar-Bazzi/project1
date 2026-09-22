@@ -1,4 +1,5 @@
 import webPush from 'web-push';
+import { isIP } from 'node:net';
 
 const errors = [];
 
@@ -24,6 +25,18 @@ requireText('JWT_AUDIENCE');
 requireInteger('REFRESH_TOKEN_TTL_DAYS', 1, 90);
 requireInteger('PASSWORD_RESET_TTL_MINUTES', 5, 120);
 requireInteger('EMAIL_VERIFICATION_TTL_HOURS', 1, 168);
+requireInteger('LOGIN_FAILURE_WINDOW_MINUTES', 5, 120);
+const loginWarningThreshold = requireInteger('LOGIN_WARNING_THRESHOLD', 2, 20);
+const loginLockThreshold = requireInteger('LOGIN_LOCK_THRESHOLD', 5, 50);
+if (
+  loginWarningThreshold !== undefined &&
+  loginLockThreshold !== undefined &&
+  loginWarningThreshold >= loginLockThreshold
+) {
+  errors.push('LOGIN_WARNING_THRESHOLD must be below LOGIN_LOCK_THRESHOLD');
+}
+requireInteger('LOGIN_LOCK_MINUTES', 5, 1_440);
+requireInteger('RATE_LIMIT_AUDIT_COALESCE_SECONDS', 5, 300);
 
 rejectPlaceholder('SMTP_HOST', requireText('SMTP_HOST'));
 requireInteger('SMTP_PORT', 1, 65_535);
@@ -42,6 +55,40 @@ requireInteger('MEDICATION_REMINDER_LEAD_MINUTES', 1, 1_440);
 requireInteger('MEDICATION_OVERDUE_GRACE_MINUTES', 1, 1_440);
 requireInteger('APPOINTMENT_REMINDER_MAX_LOOKAHEAD_HOURS', 1, 168);
 requireInteger('NOTIFICATION_DISPATCH_BATCH_SIZE', 1, 1_000);
+requireInteger('AUDIT_LOG_RETENTION_DAYS', 30, 3_650);
+requireInteger('NOTIFICATION_RETENTION_DAYS', 30, 3_650);
+requireInteger('HEALTH_METRIC_RETENTION_DAYS', 365, 36_500);
+requireInteger('EXPIRED_SECURITY_TOKEN_RETENTION_DAYS', 1, 90);
+requireInteger('DATA_RETENTION_BATCH_SIZE', 100, 10_000);
+requireInteger('DATA_RETENTION_MAX_BATCHES', 1, 100);
+const documentStoragePath = requireText('DOCUMENT_STORAGE_PATH');
+if (documentStoragePath && !documentStoragePath.startsWith('/')) {
+  errors.push('DOCUMENT_STORAGE_PATH must be an absolute container path');
+}
+requireInteger('DOCUMENT_MAX_FILES_PER_PATIENT', 1, 10_000);
+const maxDocumentBytesPerPatient = requireInteger(
+  'DOCUMENT_MAX_BYTES_PER_PATIENT',
+  10_485_760,
+  1_099_511_627_776,
+);
+const maxTotalDocumentBytes = requireInteger(
+  'DOCUMENT_MAX_TOTAL_BYTES',
+  10_485_760,
+  10_995_116_277_760,
+);
+if (
+  maxDocumentBytesPerPatient !== undefined &&
+  maxTotalDocumentBytes !== undefined &&
+  maxTotalDocumentBytes < maxDocumentBytesPerPatient
+) {
+  errors.push(
+    'DOCUMENT_MAX_TOTAL_BYTES must be at least DOCUMENT_MAX_BYTES_PER_PATIENT',
+  );
+}
+requireExact('DOCUMENT_MALWARE_SCAN_REQUIRED', 'true');
+requireHost('CLAMAV_HOST');
+requireInteger('CLAMAV_PORT', 1, 65_535);
+requireInteger('CLAMAV_TIMEOUT_MS', 1_000, 60_000);
 
 if (errors.length > 0) {
   console.error('Production environment verification failed:');
@@ -106,7 +153,7 @@ function optionalBoolean(name) {
 function requireInteger(name, minimum, maximum) {
   const value = requireText(name);
   if (!value) {
-    return;
+    return undefined;
   }
 
   const parsed = Number(value);
@@ -114,12 +161,41 @@ function requireInteger(name, minimum, maximum) {
     errors.push(
       `${name} must be an integer from ${minimum} through ${maximum}`,
     );
+    return undefined;
   }
+  return parsed;
+}
+
+function requireHost(name) {
+  const value = requireText(name);
+  if (!value) {
+    return '';
+  }
+  if (
+    value.length > 253 ||
+    /[\s/?#@\\]/u.test(value) ||
+    value.includes('\0') ||
+    value === '0.0.0.0' ||
+    value === '::' ||
+    value === '*' ||
+    (isIP(value) === 0 &&
+      !value
+        .split('.')
+        .every(
+          (label) =>
+            label.length > 0 &&
+            label.length <= 63 &&
+            /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u.test(label),
+        ))
+  ) {
+    errors.push(`${name} must be a plain host name or IP address`);
+  }
+  return value;
 }
 
 function requireDuration(name) {
   const value = requireText(name);
-  if (value && !/^\d+(s|m|h|d)$/.test(value)) {
+  if (value && !/^[1-9]\d*(s|m|h|d)$/.test(value)) {
     errors.push(`${name} must be a positive duration such as "15m"`);
   }
 }

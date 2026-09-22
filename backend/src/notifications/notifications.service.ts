@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
   Optional,
@@ -18,12 +19,16 @@ import {
   Prisma,
 } from '@prisma/client';
 
+import { getLocalDayUtcRange } from '../common/time-zone/local-day';
+import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { InAppNotificationChannel } from './in-app-notification.channel';
 import { NotificationDeliveryResult } from './notification-channel';
 import { EmailNotificationProvider } from './providers/email-notification.provider';
 import { PushNotificationProvider } from './providers/push-notification.provider';
+import { SMS_PROVIDER } from './providers/sms.provider';
+import type { SmsProvider } from './providers/sms.provider';
 
 type NotificationDatabaseClient = Prisma.TransactionClient | PrismaService;
 
@@ -36,6 +41,7 @@ const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferenceSettings = {
   inAppEnabled: true,
   emailEnabled: true,
   pushEnabled: true,
+  smsEnabled: false,
   medicationReminders: true,
   appointmentReminders: true,
   healthAlerts: true,
@@ -54,6 +60,9 @@ export class NotificationsService {
     @Optional()
     private readonly pushProvider?: PushNotificationProvider,
     @Optional() private readonly config?: ConfigService,
+    @Optional()
+    @Inject(SMS_PROVIDER)
+    private readonly smsProvider?: SmsProvider,
   ) {}
 
   async notifyHealthAlert(
@@ -128,7 +137,9 @@ export class NotificationsService {
     const preferences = await this.resolvePreferences(patient.userId, database);
 
     const notification = await database.notification.upsert({
-      where: { deduplicationKey: `health-alert:${alert.id}` },
+      where: {
+        deduplicationKey: `health-alert:${alert.id}:${alert.severity.toLowerCase()}`,
+      },
       update: {},
       create: {
         userId: patient.userId,
@@ -136,7 +147,7 @@ export class NotificationsService {
         title: 'Health alert',
         message: alert.message,
         healthAlertId: alert.id,
-        deduplicationKey: `health-alert:${alert.id}`,
+        deduplicationKey: `health-alert:${alert.id}:${alert.severity.toLowerCase()}`,
       },
     });
     await this.recordInAppDelivery(
@@ -155,6 +166,17 @@ export class NotificationsService {
         database,
         notification.id,
         NotificationChannelType.PUSH,
+      );
+    }
+    if (preferences.smsEnabled && preferences.healthAlerts) {
+      await this.deliverSms(database, notification.id, [patient.phoneNumber], {
+        body: 'CareTrack health alert: sign in to review a new alert. No measurement values are included in this SMS.',
+      });
+    } else {
+      await this.recordSkippedDelivery(
+        database,
+        notification.id,
+        NotificationChannelType.SMS,
       );
     }
 
@@ -181,35 +203,109 @@ export class NotificationsService {
         active: true,
         email: { not: null },
       },
-      select: { email: true },
+      select: { id: true, name: true, email: true },
     });
-    const recipients = contacts.flatMap(({ email }) => (email ? [email] : []));
-    const emailResult = preferences.emailEnabled
-      ? await this.deliverEmail(
-          database,
-          notification.id,
-          recipients,
-          'CareTrack emergency health alert',
-          `${patient.user.name} has a health alert that may need attention. Open CareTrack or contact them directly. No measurement values are included in this message.`,
-        )
-      : 'NOT_REQUESTED';
-
-    if (!preferences.emailEnabled) {
-      await this.recordSkippedDelivery(
-        database,
-        notification.id,
-        NotificationChannelType.EMAIL,
-      );
-    }
+    const emailResult = await this.deliverEmergencyContactEmails(database, {
+      patientId: alert.patientId,
+      contacts,
+      healthAlertId: alert.id,
+      reason: `Health alert escalated to ${alert.severity}`,
+      enabled: preferences.emailEnabled,
+      subject: 'CareTrack emergency health alert',
+      text: `${patient.user.name} has a health alert that may need attention. Open CareTrack or contact them directly. No measurement values are included in this message.`,
+    });
 
     return [
       inAppResult,
       {
         channel: 'EMERGENCY_CONTACT',
         outcome: emailResult,
-        recipientCount: recipients.length,
+        recipientCount: contacts.length,
       },
     ];
+  }
+
+  async notifyWearableSyncStale(input: {
+    userId: string;
+    deviceId: string;
+    deviceName: string;
+    provider: string;
+    referenceTime: Date;
+    staleAt: Date;
+  }) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: input.userId, accountStatus: AccountStatus.ACTIVE },
+      select: {
+        id: true,
+        email: true,
+        patient: { select: { phoneNumber: true } },
+      },
+    });
+    if (!user) return null;
+
+    const preferences = await this.resolvePreferences(user.id, this.prisma);
+    const title = 'Wearable synchronization overdue';
+    const message = `${input.deviceName} has not synchronized within your configured time limit. Open the wearable page to check the connection.`;
+    const deduplicationKey = `wearable-sync-stale:${input.deviceId}:${input.referenceTime.getTime()}`;
+    const notification = await this.prisma.notification.upsert({
+      where: { deduplicationKey },
+      update: {},
+      create: {
+        userId: user.id,
+        type: NotificationType.WEARABLE_SYNC_STALE,
+        title,
+        message,
+        deduplicationKey,
+      },
+    });
+
+    await this.recordInAppDelivery(
+      this.prisma,
+      notification.id,
+      preferences.inAppEnabled,
+    );
+    await Promise.all([
+      preferences.emailEnabled
+        ? this.deliverEmail(
+            this.prisma,
+            notification.id,
+            [user.email],
+            `CareTrack: ${title}`,
+            `${message} Last connection activity: ${input.referenceTime.toISOString()}.`,
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.EMAIL,
+          ),
+      preferences.pushEnabled
+        ? this.deliverPush(this.prisma, notification.id, user.id, {
+            title,
+            body: `${input.deviceName} needs attention.`,
+            data: { path: '/wearables', deviceId: input.deviceId },
+          })
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.PUSH,
+          ),
+      preferences.smsEnabled
+        ? this.deliverSms(
+            this.prisma,
+            notification.id,
+            [user.patient?.phoneNumber],
+            {
+              body: `CareTrack: ${input.deviceName} has not synchronized. Sign in to review wearable settings.`,
+            },
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.SMS,
+          ),
+    ]);
+
+    return notification;
   }
 
   async notifyMedicationDose(
@@ -299,8 +395,123 @@ export class NotificationsService {
             notification.id,
             NotificationChannelType.PUSH,
           ),
+      preferences.smsEnabled
+        ? this.deliverSms(
+            this.prisma,
+            notification.id,
+            [log.medication.patient.phoneNumber],
+            {
+              body: overdue
+                ? `CareTrack: ${log.medication.name} was not recorded on time. Sign in to review your medications.`
+                : `CareTrack: ${log.medication.name} is due soon. Sign in to record the dose.`,
+            },
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.SMS,
+          ),
     ]);
 
+    return notification;
+  }
+
+  async notifyMedicationRefillLow(
+    medicationId: string,
+    requestedTimeZone?: string,
+    now = new Date(),
+  ) {
+    const medication = await this.prisma.medication.findUnique({
+      where: { id: medicationId },
+      include: { patient: { include: { user: true } } },
+    });
+    if (
+      !medication ||
+      medication.patient.user.accountStatus !== AccountStatus.ACTIVE ||
+      medication.remainingQuantity === null ||
+      medication.lowQuantityThreshold === null ||
+      medication.remainingQuantity > medication.lowQuantityThreshold
+    ) {
+      return null;
+    }
+
+    const preferences = await this.resolvePreferences(
+      medication.patient.userId,
+      this.prisma,
+    );
+    if (!preferences.medicationReminders) return null;
+
+    const title = 'Medication supply running low';
+    const message = `${medication.name} is at or below your saved low-supply threshold. Review the refill details with your pharmacy or care team.`;
+    const dateKey = getLocalDayUtcRange(
+      now,
+      medication.patient.timeZone ?? requestedTimeZone,
+    ).dateKey;
+    const notification = await this.prisma.notification.upsert({
+      where: {
+        deduplicationKey: `medication-refill-low:${medication.id}:${dateKey}`,
+      },
+      update: {},
+      create: {
+        userId: medication.patient.userId,
+        type: NotificationType.MEDICATION_REFILL_LOW,
+        title,
+        message,
+        medicationId: medication.id,
+        deduplicationKey: `medication-refill-low:${medication.id}:${dateKey}`,
+      },
+    });
+
+    await this.recordInAppDelivery(
+      this.prisma,
+      notification.id,
+      preferences.inAppEnabled,
+    );
+    await Promise.all([
+      preferences.emailEnabled
+        ? this.deliverEmail(
+            this.prisma,
+            notification.id,
+            [medication.patient.user.email],
+            `CareTrack: ${title}`,
+            `${message} Sign in to CareTrack to review the stored quantity and refill date.`,
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.EMAIL,
+          ),
+      preferences.pushEnabled
+        ? this.deliverPush(
+            this.prisma,
+            notification.id,
+            medication.patient.userId,
+            {
+              title,
+              body: 'A saved medication quantity is running low.',
+              data: { path: '/medications', medicationId: medication.id },
+            },
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.PUSH,
+          ),
+      preferences.smsEnabled
+        ? this.deliverSms(
+            this.prisma,
+            notification.id,
+            [medication.patient.phoneNumber],
+            {
+              body: `CareTrack: ${medication.name} supply is running low. Sign in to review refill details.`,
+            },
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            notification.id,
+            NotificationChannelType.SMS,
+          ),
+    ]);
     return notification;
   }
 
@@ -342,6 +553,7 @@ export class NotificationsService {
         counterpartLabel: 'doctor',
         path: '/appointments',
         requiresActiveAssignment: false,
+        smsRecipients: [appointment.patient.phoneNumber],
       },
       {
         user: appointment.doctor.user,
@@ -349,6 +561,7 @@ export class NotificationsService {
         counterpartLabel: 'patient',
         path: '/doctor',
         requiresActiveAssignment: true,
+        smsRecipients: [],
       },
     ] as const;
     let notificationsCreated = 0;
@@ -426,6 +639,20 @@ export class NotificationsService {
               notification.id,
               NotificationChannelType.PUSH,
             ),
+        preferences.smsEnabled
+          ? this.deliverSms(
+              this.prisma,
+              notification.id,
+              [...recipient.smsRecipients],
+              {
+                body: `CareTrack appointment reminder: scheduled for ${dateLabel}. Sign in to review details.`,
+              },
+            )
+          : this.recordSkippedDelivery(
+              this.prisma,
+              notification.id,
+              NotificationChannelType.SMS,
+            ),
       ]);
       notificationsCreated += 1;
     }
@@ -475,15 +702,9 @@ export class NotificationsService {
     });
     await this.recordInAppDelivery(this.prisma, patientNotification.id, true);
 
-    const contactEmails = patientPreferences.emergencyContactAlerts
-      ? patient.emergencyContacts.flatMap((contact) =>
-          contact.email ? [contact.email] : [],
-        )
+    const patientEmailRecipients = patientPreferences.emailEnabled
+      ? [patient.user.email]
       : [];
-    const patientEmailRecipients = [
-      ...(patientPreferences.emailEnabled ? [patient.user.email] : []),
-      ...contactEmails,
-    ];
     await Promise.all([
       patientEmailRecipients.length > 0
         ? this.deliverEmail(
@@ -498,6 +719,17 @@ export class NotificationsService {
             patientNotification.id,
             NotificationChannelType.EMAIL,
           ),
+      patientPreferences.emergencyContactAlerts
+        ? this.deliverEmergencyContactEmails(this.prisma, {
+            patientId: patient.id,
+            contacts: patient.emergencyContacts,
+            emergencyEventId: eventId,
+            reason: 'Patient activated an urgent help request',
+            enabled: patientPreferences.emailEnabled,
+            subject: 'CareTrack urgent help request',
+            text: `${patient.user.name} used CareTrack's “I feel unwell” feature and requested assistance. Contact them directly or local emergency services if you believe immediate help is needed. CareTrack does not provide a diagnosis.`,
+          })
+        : Promise.resolve('NOT_REQUESTED' as const),
       patientPreferences.pushEnabled
         ? this.deliverPush(
             this.prisma,
@@ -513,6 +745,20 @@ export class NotificationsService {
             this.prisma,
             patientNotification.id,
             NotificationChannelType.PUSH,
+          ),
+      patientPreferences.smsEnabled
+        ? this.deliverSms(
+            this.prisma,
+            patientNotification.id,
+            [patient.phoneNumber],
+            {
+              body: 'CareTrack urgent help request recorded. Contact local emergency services if immediate help is needed.',
+            },
+          )
+        : this.recordSkippedDelivery(
+            this.prisma,
+            patientNotification.id,
+            NotificationChannelType.SMS,
           ),
     ]);
 
@@ -555,21 +801,33 @@ export class NotificationsService {
           ? this.deliverPush(this.prisma, notification.id, doctorUser.id, {
               title: 'Assigned patient requested attention',
               body: 'Open CareTrack to review the urgent request.',
-              data: { path: `/doctor/patients/${patient.id}`, eventId },
+              data: { path: `/doctor?patientId=${patient.id}`, eventId },
             })
           : this.recordSkippedDelivery(
               this.prisma,
               notification.id,
               NotificationChannelType.PUSH,
             ),
+        this.recordSkippedDelivery(
+          this.prisma,
+          notification.id,
+          NotificationChannelType.SMS,
+        ),
       ]);
     }
   }
 
-  async findForUser(userId: string, unreadOnly: boolean, limit: number) {
+  async findForUser(
+    userId: string,
+    unreadOnly: boolean,
+    limit: number,
+    page = 1,
+    type?: NotificationType,
+  ) {
     const where: Prisma.NotificationWhereInput = {
       userId,
       ...(unreadOnly ? { readAt: null } : {}),
+      ...(type ? { type } : {}),
       deliveries: {
         some: {
           channel: NotificationChannelType.IN_APP,
@@ -577,18 +835,24 @@ export class NotificationsService {
         },
       },
     };
-    const [items, unreadCount] = await this.prisma.$transaction([
+    const [items, unreadCount, total] = await this.prisma.$transaction([
       this.prisma.notification.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
         take: limit,
       }),
       this.prisma.notification.count({
         where: { ...where, readAt: null },
       }),
+      this.prisma.notification.count({ where }),
     ]);
 
-    return { items, unreadCount };
+    return {
+      items,
+      unreadCount,
+      pagination: paginationMetadata(page, limit, total),
+    };
   }
 
   async markRead(userId: string, notificationId: string) {
@@ -811,7 +1075,7 @@ export class NotificationsService {
       const preferences = await this.resolvePreferences(user.id, database);
       if (!preferences.healthAlerts) continue;
 
-      const deduplicationKey = `health-alert:${alert.id}:${user.id}`;
+      const deduplicationKey = `health-alert:${alert.id}:${alert.severity.toLowerCase()}:${user.id}`;
       const notification = await database.notification.upsert({
         where: { deduplicationKey },
         update: {},
@@ -848,7 +1112,7 @@ export class NotificationsService {
               title: 'Assigned patient health alert',
               body: 'Open CareTrack to review the authorized patient record.',
               data: {
-                path: `/doctor/patients/${alert.patientId}`,
+                path: `/doctor?patientId=${alert.patientId}`,
                 alertId: alert.id,
               },
             })
@@ -857,6 +1121,11 @@ export class NotificationsService {
               notification.id,
               NotificationChannelType.PUSH,
             ),
+        this.recordSkippedDelivery(
+          database,
+          notification.id,
+          NotificationChannelType.SMS,
+        ),
       ]);
     }
   }
@@ -926,6 +1195,7 @@ export class NotificationsService {
       inAppEnabled: preference.inAppEnabled,
       emailEnabled: preference.emailEnabled,
       pushEnabled: preference.pushEnabled,
+      smsEnabled: preference.smsEnabled,
       medicationReminders: preference.medicationReminders,
       appointmentReminders: preference.appointmentReminders,
       healthAlerts: preference.healthAlerts,
@@ -933,6 +1203,109 @@ export class NotificationsService {
       securityAlerts: preference.securityAlerts,
       appointmentReminderHours: preference.appointmentReminderHours,
     };
+  }
+
+  private async deliverEmergencyContactEmails(
+    database: NotificationDatabaseClient,
+    input: {
+      patientId: string;
+      contacts: Array<{
+        id: string;
+        name: string;
+        email: string | null;
+      }>;
+      healthAlertId?: string;
+      emergencyEventId?: string;
+      reason: string;
+      enabled: boolean;
+      subject: string;
+      text: string;
+    },
+  ): Promise<'DELIVERED' | 'NOT_REQUESTED' | 'NOT_CONFIGURED' | 'FAILED'> {
+    const contacts = input.contacts.filter(
+      (contact): contact is typeof contact & { email: string } =>
+        typeof contact.email === 'string' && contact.email.length > 0,
+    );
+    if (contacts.length === 0) return 'NOT_CONFIGURED';
+
+    const outcomes: Array<
+      'DELIVERED' | 'NOT_REQUESTED' | 'NOT_CONFIGURED' | 'FAILED'
+    > = [];
+
+    for (const contact of contacts) {
+      const where = {
+        patientId: input.patientId,
+        emergencyContactId: contact.id,
+        healthAlertId: input.healthAlertId ?? null,
+        emergencyEventId: input.emergencyEventId ?? null,
+        channel: NotificationChannelType.EMAIL,
+      };
+      const existing = await database.emergencyContactNotification.findFirst({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+      const history =
+        existing ??
+        (await database.emergencyContactNotification.create({
+          data: {
+            ...where,
+            reason: input.reason.slice(0, 500),
+            recipientName: contact.name,
+            recipientAddress: contact.email,
+            status: input.enabled
+              ? NotificationDeliveryStatus.PENDING
+              : NotificationDeliveryStatus.SKIPPED,
+            errorCode: input.enabled ? null : 'CHANNEL_DISABLED',
+          },
+        }));
+
+      if (history.status === NotificationDeliveryStatus.SENT) {
+        outcomes.push('DELIVERED');
+        continue;
+      }
+      if (!input.enabled) {
+        outcomes.push('NOT_REQUESTED');
+        continue;
+      }
+
+      const result = this.emailProvider
+        ? await this.emailProvider.send({
+            recipients: [contact.email],
+            subject: input.subject,
+            text: input.text,
+          })
+        : { outcome: 'NOT_CONFIGURED' as const };
+      const status =
+        result.outcome === 'DELIVERED'
+          ? NotificationDeliveryStatus.SENT
+          : result.outcome === 'FAILED'
+            ? NotificationDeliveryStatus.FAILED
+            : NotificationDeliveryStatus.SKIPPED;
+
+      await database.emergencyContactNotification.update({
+        where: { id: history.id },
+        data: {
+          status,
+          providerMessageId: result.providerMessageId ?? null,
+          errorCode:
+            result.errorCode ??
+            (result.outcome === 'NOT_CONFIGURED'
+              ? 'EMAIL_NOT_CONFIGURED'
+              : null),
+          notifiedAt: new Date(),
+        },
+      });
+      outcomes.push(result.outcome);
+    }
+
+    if (outcomes.includes('FAILED')) return 'FAILED';
+    if (outcomes.every((outcome) => outcome === 'DELIVERED')) {
+      return 'DELIVERED';
+    }
+    if (outcomes.every((outcome) => outcome === 'NOT_REQUESTED')) {
+      return 'NOT_REQUESTED';
+    }
+    return 'NOT_CONFIGURED';
   }
 
   private async deliverEmail(
@@ -1014,6 +1387,105 @@ export class NotificationsService {
         sentAt: status === NotificationDeliveryStatus.SENT ? new Date() : null,
         providerMessageId: result.providerMessageId,
         errorCode: result.errorCode,
+      },
+    });
+
+    return result.outcome;
+  }
+
+  private async deliverSms(
+    database: NotificationDatabaseClient,
+    notificationId: string,
+    recipients: Array<string | null | undefined>,
+    message: { body: string },
+  ): Promise<'DELIVERED' | 'NOT_CONFIGURED' | 'FAILED' | 'DEFERRED'> {
+    const delivery = await database.notificationDelivery.upsert({
+      where: {
+        notificationId_channel: {
+          notificationId,
+          channel: NotificationChannelType.SMS,
+        },
+      },
+      update: {},
+      create: {
+        notificationId,
+        channel: NotificationChannelType.SMS,
+        status: NotificationDeliveryStatus.PENDING,
+      },
+    });
+
+    if (delivery.status === NotificationDeliveryStatus.SENT) {
+      return 'DELIVERED';
+    }
+
+    if (delivery.status === NotificationDeliveryStatus.SKIPPED) {
+      return 'NOT_CONFIGURED';
+    }
+
+    const claimed = await database.notificationDelivery.updateMany({
+      where: {
+        id: delivery.id,
+        attempts: { lt: 5 },
+        OR: [
+          {
+            status: {
+              in: [
+                NotificationDeliveryStatus.PENDING,
+                NotificationDeliveryStatus.FAILED,
+              ],
+            },
+          },
+          {
+            status: NotificationDeliveryStatus.PROCESSING,
+            lastAttemptAt: { lt: new Date(Date.now() - 5 * 60_000) },
+          },
+        ],
+      },
+      data: {
+        status: NotificationDeliveryStatus.PROCESSING,
+        attempts: { increment: 1 },
+        lastAttemptAt: new Date(),
+      },
+    });
+
+    if (claimed.count === 0) {
+      return delivery.status === NotificationDeliveryStatus.FAILED
+        ? 'FAILED'
+        : 'DEFERRED';
+    }
+
+    const smsRecipients = [
+      ...new Set(
+        recipients
+          .filter(
+            (recipient): recipient is string => typeof recipient === 'string',
+          )
+          .map((recipient) => recipient.trim())
+          .filter(Boolean),
+      ),
+    ];
+    const result = this.smsProvider
+      ? await this.smsProvider.send({
+          recipients: smsRecipients,
+          body: message.body,
+        })
+      : { outcome: 'NOT_CONFIGURED' as const };
+    const status =
+      result.outcome === 'DELIVERED'
+        ? NotificationDeliveryStatus.SENT
+        : result.outcome === 'FAILED'
+          ? NotificationDeliveryStatus.FAILED
+          : NotificationDeliveryStatus.SKIPPED;
+
+    await database.notificationDelivery.update({
+      where: { id: delivery.id },
+      data: {
+        status,
+        sentAt: status === NotificationDeliveryStatus.SENT ? new Date() : null,
+        providerMessageId: result.providerMessageId,
+        errorCode:
+          result.errorCode ??
+          (result.outcome === 'NOT_CONFIGURED' ? 'SMS_NOT_CONFIGURED' : null),
       },
     });
 

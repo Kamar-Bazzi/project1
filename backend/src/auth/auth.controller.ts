@@ -27,7 +27,15 @@ import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SecurityEventsQueryDto } from './dto/security-events-query.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import {
+  ConfirmAuthenticatorSetupDto,
+  DisableTwoFactorDto,
+  TwoFactorPasswordDto,
+  VerifyTwoFactorLoginDto,
+} from './dto/two-factor.dto';
+import { Roles } from './decorators/roles.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -81,6 +89,93 @@ export class AuthController {
     this.setRefreshCookie(response, authentication);
 
     return this.publicAuthenticationResponse(authentication);
+  }
+
+  @Post('2fa/login/verify')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
+  async verifyTwoFactorLogin(
+    @Body() dto: VerifyTwoFactorLoginDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const authentication = await this.authService.verifyTwoFactorLogin(
+      dto,
+      this.sessionContext(request),
+    );
+    this.setRefreshCookie(response, authentication);
+    return this.publicAuthenticationResponse(authentication);
+  }
+
+  @Get('2fa')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.DOCTOR, UserRole.ADMIN)
+  getTwoFactorStatus(@Req() request: AuthenticatedRequest) {
+    return this.authService.getTwoFactorStatus(request.user.id);
+  }
+
+  @Post('2fa/email/enable')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.DOCTOR, UserRole.ADMIN)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  enableEmailTwoFactor(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: TwoFactorPasswordDto,
+  ) {
+    return this.authService.enableEmailTwoFactor(
+      request.user.id,
+      dto,
+      this.sessionContext(request),
+    );
+  }
+
+  @Post('2fa/authenticator/setup')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.DOCTOR, UserRole.ADMIN)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  beginAuthenticatorSetup(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: TwoFactorPasswordDto,
+  ) {
+    return this.authService.beginAuthenticatorSetup(
+      request.user.id,
+      dto,
+      this.sessionContext(request),
+    );
+  }
+
+  @Post('2fa/authenticator/confirm')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.DOCTOR, UserRole.ADMIN)
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
+  confirmAuthenticatorSetup(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: ConfirmAuthenticatorSetupDto,
+  ) {
+    return this.authService.confirmAuthenticatorSetup(
+      request.user.id,
+      dto,
+      this.sessionContext(request),
+    );
+  }
+
+  @Delete('2fa')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.DOCTOR, UserRole.ADMIN)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  disableTwoFactor(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: DisableTwoFactorDto,
+  ) {
+    return this.authService.disableTwoFactor(
+      request.user.id,
+      dto,
+      this.sessionContext(request),
+    );
   }
 
   @Post('refresh')
@@ -294,6 +389,10 @@ export class AuthController {
   private publicAuthenticationResponse(authentication: {
     accessToken?: string;
     requiresEmailVerification?: boolean;
+    requiresTwoFactor?: boolean;
+    challengeId?: string;
+    method?: string;
+    expiresAt?: Date;
     user: unknown;
   }) {
     return {
@@ -302,6 +401,14 @@ export class AuthController {
         : {}),
       ...(authentication.requiresEmailVerification
         ? { requiresEmailVerification: true }
+        : {}),
+      ...(authentication.requiresTwoFactor
+        ? {
+            requiresTwoFactor: true,
+            challengeId: authentication.challengeId,
+            method: authentication.method,
+            expiresAt: authentication.expiresAt,
+          }
         : {}),
       user: authentication.user,
     };

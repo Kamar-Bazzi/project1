@@ -11,6 +11,7 @@ import {
   HealthMetricType,
   Prisma,
   WearableProvider,
+  WearableSyncStatus,
 } from '@prisma/client';
 
 import { HealthAuditService } from '../common/health-audit/health-audit.service';
@@ -28,6 +29,7 @@ import { HealthMetricsQueryDto } from './dto/health-metrics-query.dto';
 import { SyncHealthMetricsDto } from './dto/sync-health-metrics.dto';
 
 const SERIALIZABLE_TRANSACTION_ATTEMPTS = 3;
+export const MAX_WEARABLE_IMPORT_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 
 const healthMetricResponseSelect = {
   id: true,
@@ -58,11 +60,23 @@ const PROVIDER_SOURCES: Record<WearableProvider, HealthMetricSource> = {
 };
 
 export interface HealthMetricSyncResult {
+  syncRunId: string;
+  status: WearableSyncStatus;
   receivedCount: number;
   createdCount: number;
   duplicateCount: number;
-  lastSyncAt: Date;
+  rejectedCount: number;
+  errorCount: number;
+  errors: WearableSyncError[];
+  lastSyncAt: Date | null;
   metrics: HealthMetricResponse[];
+}
+
+export interface WearableSyncError {
+  code: string;
+  message: string;
+  index?: number;
+  count?: number;
 }
 
 @Injectable()
@@ -332,10 +346,33 @@ export class HealthMetricsService {
         transaction,
       );
 
+      const syncRunId = randomUUID();
+      const duplicateCount = candidates.length - createdMetrics.length;
+      await transaction.wearableSyncRun.create({
+        data: {
+          id: syncRunId,
+          patientId,
+          wearableDeviceId: device.id,
+          provider: device.provider,
+          status: WearableSyncStatus.SUCCESS,
+          receivedCount: candidates.length,
+          importedCount: createdMetrics.length,
+          duplicateCount,
+          rejectedCount: 0,
+          errorCount: 0,
+          completedAt: lastSyncAt,
+        },
+      });
+
       return {
+        syncRunId,
+        status: WearableSyncStatus.SUCCESS,
         receivedCount: candidates.length,
         createdCount: createdMetrics.length,
-        duplicateCount: candidates.length - createdMetrics.length,
+        duplicateCount,
+        rejectedCount: 0,
+        errorCount: 0,
+        errors: [],
         lastSyncAt,
         metrics: createdMetrics.map((metric) => this.toResponse(metric)),
       };
@@ -359,15 +396,16 @@ export class HealthMetricsService {
     }
 
     const provider = this.providerRegistry.get(device.provider);
-    const generated = provider?.generateDemoMeasurements?.(device);
 
-    if (!provider?.isDemo || !generated) {
+    if (!provider?.isDemo) {
       throw new BadRequestException('Demo wearable provider is unavailable');
     }
 
+    const { measurements } = await provider.sync(device, { userId });
+
     return this.syncForPatient(userId, {
       wearableDeviceId,
-      measurements: generated.map((measurement) => ({
+      measurements: measurements.map((measurement) => ({
         metricType: measurement.metricType,
         value: measurement.value,
         secondaryValue: measurement.secondaryValue,

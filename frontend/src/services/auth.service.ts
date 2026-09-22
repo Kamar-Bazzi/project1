@@ -31,6 +31,31 @@ export interface AuthenticationResponse {
   user: AuthenticatedUser;
 }
 
+export type TwoFactorMethod = "EMAIL_OTP" | "AUTHENTICATOR";
+
+export interface TwoFactorChallengeResponse {
+  requiresTwoFactor: true;
+  challengeId: string;
+  method: TwoFactorMethod;
+  expiresAt: string;
+  user: AuthenticatedUser;
+}
+
+export interface TwoFactorStatus {
+  requiredForRole: boolean;
+  enabled: boolean;
+  method: TwoFactorMethod | null;
+  enabledAt: string | null;
+  availableMethods: TwoFactorMethod[];
+}
+
+export interface AuthenticatorSetup {
+  challengeId: string;
+  secret: string;
+  otpauthUrl: string;
+  expiresAt: string;
+}
+
 export interface RegistrationResponse {
   accessToken?: string;
   requiresEmailVerification?: boolean;
@@ -77,13 +102,71 @@ interface SecurityEventListResponse {
 }
 
 export const authService = {
-  async login(payload: LoginPayload): Promise<AuthenticationResponse> {
-    const response = await api.post<AuthenticationResponse>(
+  async login(
+    payload: LoginPayload,
+  ): Promise<AuthenticationResponse | TwoFactorChallengeResponse> {
+    const response = await api.post<
+      AuthenticationResponse | TwoFactorChallengeResponse
+    >(
       "/auth/login",
       payload,
     );
 
     return response.data;
+  },
+
+  async verifyTwoFactorLogin(
+    challengeId: string,
+    code: string,
+  ): Promise<AuthenticationResponse> {
+    const response = await api.post<AuthenticationResponse>(
+      "/auth/2fa/login/verify",
+      { challengeId, code },
+    );
+    return response.data;
+  },
+
+  async getTwoFactorStatus(): Promise<TwoFactorStatus> {
+    const response = await api.get<TwoFactorStatus>("/auth/2fa");
+    return response.data;
+  },
+
+  async enableEmailTwoFactor(currentPassword: string): Promise<string> {
+    const response = await api.post<MessageResponse>("/auth/2fa/email/enable", {
+      currentPassword,
+    });
+    return response.data.message;
+  },
+
+  async beginAuthenticatorSetup(
+    currentPassword: string,
+  ): Promise<AuthenticatorSetup> {
+    const response = await api.post<AuthenticatorSetup>(
+      "/auth/2fa/authenticator/setup",
+      { currentPassword },
+    );
+    return response.data;
+  },
+
+  async confirmAuthenticatorSetup(
+    challengeId: string,
+    code: string,
+  ): Promise<string> {
+    const response = await api.post<MessageResponse>(
+      "/auth/2fa/authenticator/confirm",
+      { challengeId, code },
+    );
+    return response.data.message;
+  },
+
+  async disableTwoFactor(
+    currentPassword: string,
+    code?: string,
+  ): Promise<string> {
+    const response = await api.delete<MessageResponse>("/auth/2fa", {
+      data: { currentPassword, code: code || undefined },
+    });
+    return response.data.message;
   },
 
   async register(payload: RegisterPayload): Promise<RegistrationResponse> {

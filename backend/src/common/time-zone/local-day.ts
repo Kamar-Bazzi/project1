@@ -28,6 +28,16 @@ export function getLocalDayUtcRange(
   const timeZone =
     canonicalizeIanaTimeZone(requestedTimeZone) ?? DEFAULT_TIME_ZONE;
   const dateKey = dateKeyFromParts(zonedDateTimeParts(instant, timeZone));
+
+  return getLocalDateUtcRange(dateKey, timeZone);
+}
+
+export function getLocalDateUtcRange(
+  dateKey: string,
+  requestedTimeZone: string | null | undefined,
+): LocalDayUtcRange {
+  const timeZone =
+    canonicalizeIanaTimeZone(requestedTimeZone) ?? DEFAULT_TIME_ZONE;
   const nextDateKey = addCalendarDays(dateKey, 1);
 
   return {

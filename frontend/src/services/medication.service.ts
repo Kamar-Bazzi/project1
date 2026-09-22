@@ -1,11 +1,31 @@
 import type {
   Medication,
   MedicationInput,
+  MedicationInteractionReview,
   MedicationLog,
   MedicationLogStatus,
+  MedicationRefillInput,
   UpdateMedicationInput,
 } from "../types/medication";
 import api from "./api";
+
+export interface MedicationListFilters {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: Medication["status"];
+  doseStatus?: MedicationLogStatus;
+}
+
+export interface MedicationPage {
+  items: Medication[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+}
 
 export const medicationService = {
   async list(): Promise<Medication[]> {
@@ -13,10 +33,15 @@ export const medicationService = {
     return response.data;
   },
 
+  async listPage(filters: MedicationListFilters = {}): Promise<MedicationPage> {
+    const response = await api.get<MedicationPage>("/medications/paged", {
+      params: filters,
+    });
+    return response.data;
+  },
+
   async get(medicationId: string): Promise<Medication> {
-    const response = await api.get<Medication>(
-      `/medications/${medicationId}`,
-    );
+    const response = await api.get<Medication>(`/medications/${medicationId}`);
     return response.data;
   },
 
@@ -48,6 +73,24 @@ export const medicationService = {
     const response = await api.patch<MedicationLog>(
       `/medications/${medicationId}/logs/${logId}/status`,
       { status },
+    );
+    return response.data;
+  },
+
+  async updateRefill(
+    medicationId: string,
+    input: MedicationRefillInput,
+  ): Promise<Medication> {
+    const response = await api.patch<Medication>(
+      `/medications/${medicationId}/refill`,
+      input,
+    );
+    return response.data;
+  },
+
+  async interactions(): Promise<MedicationInteractionReview> {
+    const response = await api.get<MedicationInteractionReview>(
+      "/medications/interactions",
     );
     return response.data;
   },

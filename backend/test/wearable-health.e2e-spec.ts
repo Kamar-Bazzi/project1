@@ -17,6 +17,8 @@ describe('Wearable health security and validation (e2e)', () => {
   let patientToken: string;
   let doctorToken: string;
   const originalJwtSecret = process.env.JWT_SECRET;
+  const originalJwtIssuer = process.env.JWT_ISSUER;
+  const originalJwtAudience = process.env.JWT_AUDIENCE;
   const originalSwaggerEnabled = process.env.SWAGGER_ENABLED;
   const testJwtSecret = 'wearable-e2e-test-only-secret-value';
   const deviceId = '11aa22bb-33cc-44dd-88ee-112233445566';
@@ -26,6 +28,8 @@ describe('Wearable health security and validation (e2e)', () => {
 
   beforeAll(async () => {
     process.env.JWT_SECRET = testJwtSecret;
+    process.env.JWT_ISSUER = '';
+    process.env.JWT_AUDIENCE = '';
     process.env.SWAGGER_ENABLED = 'false';
 
     const prisma = {
@@ -265,6 +269,18 @@ describe('Wearable health security and validation (e2e)', () => {
       delete process.env.JWT_SECRET;
     } else {
       process.env.JWT_SECRET = originalJwtSecret;
+    }
+
+    if (originalJwtIssuer === undefined) {
+      delete process.env.JWT_ISSUER;
+    } else {
+      process.env.JWT_ISSUER = originalJwtIssuer;
+    }
+
+    if (originalJwtAudience === undefined) {
+      delete process.env.JWT_AUDIENCE;
+    } else {
+      process.env.JWT_AUDIENCE = originalJwtAudience;
     }
 
     if (originalSwaggerEnabled === undefined) {

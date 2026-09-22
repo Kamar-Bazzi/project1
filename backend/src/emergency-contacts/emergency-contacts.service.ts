@@ -2,8 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { EmergencyContact, Prisma } from '@prisma/client';
 
 import { HealthAuditService } from '../common/health-audit/health-audit.service';
+import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEmergencyContactDto } from './dto/create-emergency-contact.dto';
+import { EmergencyContactNotificationQueryDto } from './dto/emergency-contact-notification-query.dto';
 import { UpdateEmergencyContactDto } from './dto/update-emergency-contact.dto';
 
 const SERIALIZABLE_TRANSACTION_ATTEMPTS = 3;
@@ -54,6 +56,64 @@ export class EmergencyContactsService {
     });
 
     return contact;
+  }
+
+  async findNotificationHistoryForPatient(
+    userId: string,
+    query: EmergencyContactNotificationQueryDto,
+  ) {
+    const patientId = await this.getPatientId(userId);
+    const where: Prisma.EmergencyContactNotificationWhereInput = {
+      patientId,
+      emergencyContactId: query.emergencyContactId,
+      status: query.status,
+    };
+    const skip = (query.page - 1) * query.pageSize;
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.emergencyContactNotification.findMany({
+        where,
+        select: {
+          id: true,
+          emergencyContactId: true,
+          reason: true,
+          recipientName: true,
+          recipientAddress: true,
+          channel: true,
+          status: true,
+          providerMessageId: true,
+          errorCode: true,
+          notifiedAt: true,
+          healthAlert: {
+            select: {
+              id: true,
+              metricType: true,
+              severity: true,
+              status: true,
+              detectedAt: true,
+            },
+          },
+          emergencyEvent: {
+            select: { id: true, status: true, triggeredAt: true },
+          },
+        },
+        orderBy: [{ notifiedAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: query.pageSize,
+      }),
+      this.prisma.emergencyContactNotification.count({ where }),
+    ]);
+
+    await this.audit.record({
+      userId,
+      action: 'EMERGENCY_CONTACT_NOTIFICATION_HISTORY_ACCESSED',
+      entity: 'EmergencyContactNotification',
+      metadata: { patientId, count: items.length, resultCount: total },
+    });
+
+    return {
+      items,
+      pagination: paginationMetadata(query.page, query.pageSize, total),
+    };
   }
 
   async createForPatient(

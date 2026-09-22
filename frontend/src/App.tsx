@@ -25,7 +25,11 @@ import MedicalHistoryPage from "./pages/patient/MedicalHistoryPage";
 import PatientDashboardPage from "./pages/patient/PatientDashboardPage";
 import PatientProfilePage from "./pages/patient/PatientProfilePage";
 import ReportsPage from "./pages/patient/ReportsPage";
+import PrivacyPage from "./pages/patient/PrivacyPage";
 import WearablesPage from "./pages/patient/WearablesPage";
+import CheckInsPage from "./pages/patient/CheckInsPage";
+import DocumentsPage from "./pages/patient/DocumentsPage";
+import SymptomsPage from "./pages/patient/SymptomsPage";
 
 export default function App() {
   return (
@@ -75,6 +79,10 @@ export default function App() {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/goals" element={<GoalsPage />} />
           <Route path="/emergency" element={<EmergencyPage />} />
+          <Route path="/check-ins" element={<CheckInsPage />} />
+          <Route path="/symptoms" element={<SymptomsPage />} />
+          <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
         </Route>
 
         <Route

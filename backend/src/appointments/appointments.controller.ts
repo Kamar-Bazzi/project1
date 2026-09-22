@@ -29,6 +29,8 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AppointmentActor, AppointmentsService } from './appointments.service';
+import { DoctorAvailabilityService } from './doctor-availability.service';
+import { AvailableSlotQueryDto } from './dto/available-slot-query.dto';
 import { AppointmentQueryDto } from './dto/appointment-query.dto';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
@@ -43,7 +45,10 @@ interface AuthenticatedAppointmentRequest extends Request {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.PATIENT, UserRole.DOCTOR, UserRole.ADMIN)
 export class AppointmentsController {
-  constructor(private readonly appointmentsService: AppointmentsService) {}
+  constructor(
+    private readonly appointmentsService: AppointmentsService,
+    private readonly doctorAvailability: DoctorAvailabilityService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'List role-scoped appointments' })
@@ -60,6 +65,23 @@ export class AppointmentsController {
   @ApiOkResponse({ description: 'Available doctor profiles' })
   listAvailableDoctors(@Req() request: AuthenticatedAppointmentRequest) {
     return this.appointmentsService.listAvailableDoctors(request.user);
+  }
+
+  @Get('doctors/:doctorId/slots')
+  @ApiOperation({
+    summary: 'List conflict-free slots for an authorized doctor',
+  })
+  @ApiOkResponse({ description: 'Available appointment slots' })
+  listAvailableSlots(
+    @Req() request: AuthenticatedAppointmentRequest,
+    @Param('doctorId', new ParseUUIDPipe({ version: '4' })) doctorId: string,
+    @Query() query: AvailableSlotQueryDto,
+  ) {
+    return this.doctorAvailability.listAvailableSlots(
+      request.user,
+      doctorId,
+      query,
+    );
   }
 
   @Get(':id')

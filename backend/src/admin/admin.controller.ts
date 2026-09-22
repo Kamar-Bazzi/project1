@@ -37,6 +37,7 @@ import {
 } from './dto/admin-user.dto';
 import { AssignmentQueryDto, CreateAssignmentDto } from './dto/assignment.dto';
 import { AuditLogQueryDto } from './dto/audit-log-query.dto';
+import { SecurityDashboardQueryDto } from './dto/security-dashboard-query.dto';
 
 interface AuthenticatedAdminRequest extends Request {
   user: {
@@ -58,6 +59,35 @@ export class AdminController {
   @ApiOkResponse({ description: 'User, role, account, and audit summaries' })
   getDashboard() {
     return this.adminService.getDashboard();
+  }
+
+  @Get('security/dashboard')
+  @ApiOperation({ summary: 'Get recent authentication security activity' })
+  @ApiOkResponse({
+    description:
+      'Failed logins, temporary locks, unusual access, rate limits, and audits',
+  })
+  getSecurityDashboard(@Query() query: SecurityDashboardQueryDto) {
+    return this.adminService.getSecurityDashboard(query);
+  }
+
+  @Get('data-retention/policies')
+  @ApiOperation({ summary: 'Get active database data-retention policies' })
+  @ApiOkResponse({ description: 'Retention durations and current cutoffs' })
+  getRetentionPolicies() {
+    return this.adminService.getRetentionPolicies();
+  }
+
+  @Post('security/locked-accounts/:userId/unlock')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Clear a temporary login lock' })
+  @ApiOkResponse({ description: 'Account login lock cleared' })
+  @ApiNotFoundResponse({ description: 'User not found' })
+  unlockAccount(
+    @Req() request: AuthenticatedAdminRequest,
+    @Param('userId', new ParseUUIDPipe({ version: '4' })) userId: string,
+  ) {
+    return this.adminService.unlockAccount(request.user.id, userId);
   }
 
   @Get('roles')

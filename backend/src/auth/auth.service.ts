@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   Optional,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -14,11 +15,20 @@ import {
   NotificationType,
   OneTimeTokenPurpose,
   Prisma,
+  TwoFactorChallengePurpose,
+  TwoFactorMethod,
   User,
   UserRole,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomInt,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
+import { isIP } from 'node:net';
 
 import {
   canonicalizeIanaTimeZone,
@@ -31,7 +41,19 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import {
+  ConfirmAuthenticatorSetupDto,
+  DisableTwoFactorDto,
+  TwoFactorPasswordDto,
+  VerifyTwoFactorLoginDto,
+} from './dto/two-factor.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import {
+  decryptAuthenticatorSecret,
+  encryptAuthenticatorSecret,
+  generateAuthenticatorSecret,
+  verifyTotp,
+} from './two-factor-crypto';
 
 interface TokenPayload {
   sub: string;
@@ -43,6 +65,20 @@ interface TokenPayload {
 export interface SessionRequestContext {
   ipAddress?: string;
   userAgent?: string;
+}
+
+interface LoginRiskAnalysis {
+  suspicious: boolean;
+  reason: string | null;
+  riskScore: number;
+  signals: string[];
+}
+
+interface LoginSessionContext {
+  deviceFingerprint: string | null;
+  networkFingerprint: string | null;
+  userAgent: string | null;
+  createdByIp: string | null;
 }
 
 type AuthenticationUser = Pick<
@@ -67,6 +103,8 @@ const DUMMY_PASSWORD_HASH =
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -133,6 +171,7 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto, context: SessionRequestContext = {}) {
+    const now = new Date();
     const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
     });
@@ -142,30 +181,87 @@ export class AuthService {
     );
 
     if (!user || !passwordIsCorrect) {
-      const recentFailures = await this.recentLoginFailureCount(
-        user?.id,
-        context.ipAddress,
-      );
-      const suspicious = recentFailures >= 2;
-      const auditId = await this.recordAuthAudit(
-        user?.id,
-        'LOGIN_FAILED',
-        context,
-        {
-          reason: 'INVALID_CREDENTIALS',
-          suspicious,
-          failureCount: recentFailures + 1,
-        },
-      );
+      if (user && this.isLoginLocked(user, now)) {
+        await this.recordAuthAudit(user.id, 'LOGIN_FAILED', context, {
+          reason: 'ACCOUNT_TEMPORARILY_LOCKED',
+          suspicious: false,
+          lockedUntil: user.lockedUntil?.toISOString(),
+        });
+        throw new UnauthorizedException(INVALID_CREDENTIALS);
+      }
 
-      if (user && suspicious) {
-        await this.notifySecurityAlert(
+      const recentFailures =
+        (await this.recentLoginFailureCount(user?.id, context.ipAddress)) + 1;
+      const lock = user
+        ? await this.registerFailedLogin(user, now)
+        : { accountFailureCount: 0, newlyLocked: false, lockedUntil: null };
+      const warningThreshold = this.loginWarningThreshold();
+      const suspicious = recentFailures >= warningThreshold;
+      await this.recordAuthAudit(user?.id, 'LOGIN_FAILED', context, {
+        reason: 'INVALID_CREDENTIALS',
+        suspicious,
+        failureCount: recentFailures,
+        accountFailureCount: lock.accountFailureCount,
+        locked: lock.newlyLocked,
+        lockedUntil: lock.lockedUntil?.toISOString(),
+      });
+
+      const unusualThresholdCrossed =
+        recentFailures === warningThreshold || lock.newlyLocked;
+      let unusualAuditId: string | undefined;
+      if (suspicious && unusualThresholdCrossed) {
+        unusualAuditId = await this.recordAuthAudit(
+          user?.id,
+          'UNUSUAL_LOGIN_ATTEMPT',
+          context,
+          {
+            outcome: 'FAILED',
+            reason: 'REPEATED_FAILED_ATTEMPTS',
+            riskScore: lock.newlyLocked ? 3 : 2,
+            failureCount: recentFailures,
+          },
+        );
+      }
+
+      let lockAuditId: string | undefined;
+      if (user && lock.newlyLocked) {
+        lockAuditId = await this.recordAuthAudit(
+          user.id,
+          'ACCOUNT_TEMPORARILY_LOCKED',
+          context,
+          {
+            reason: 'REPEATED_FAILED_ATTEMPTS',
+            failureCount: lock.accountFailureCount,
+            lockedUntil: lock.lockedUntil?.toISOString(),
+          },
+        );
+      }
+
+      if (user && unusualThresholdCrossed) {
+        await this.notifySecurityAlertSafely(
           user,
-          auditId,
-          'Multiple failed sign-in attempts were detected for your account.',
+          lockAuditId ?? unusualAuditId,
+          lock.newlyLocked
+            ? `Your account was temporarily locked after repeated unsuccessful sign-in attempts. The lock expires at ${lock.lockedUntil?.toISOString()}. You can also reset your password.`
+            : 'Multiple unsuccessful sign-in attempts were detected for your account.',
         );
       }
       throw new UnauthorizedException(INVALID_CREDENTIALS);
+    }
+
+    if (this.isLoginLocked(user, now)) {
+      await this.recordAuthAudit(user.id, 'LOGIN_FAILED', context, {
+        reason: 'ACCOUNT_TEMPORARILY_LOCKED',
+        suspicious: false,
+        lockedUntil: user.lockedUntil?.toISOString(),
+      });
+      const remainingMinutes = Math.max(
+        1,
+        Math.ceil((user.lockedUntil!.getTime() - now.getTime()) / 60_000),
+      );
+      throw new UnauthorizedException(
+        `Account is temporarily locked. Try again in ${remainingMinutes} minute(s) or reset your password.`,
+      );
     }
 
     try {
@@ -192,29 +288,385 @@ export class AuthService {
       );
     }
 
+    if (this.requiresTwoFactorChallenge(user)) {
+      await this.clearFailedLoginState(user.id);
+      const challenge = await this.issueTwoFactorLoginChallenge(user);
+      await this.recordAuthAudit(
+        user.id,
+        'TWO_FACTOR_CHALLENGE_ISSUED',
+        context,
+        { method: challenge.method },
+      );
+      return {
+        ...challenge,
+        requiresTwoFactor: true as const,
+        user: this.toPublicUser(user),
+      };
+    }
+
     const suspiciousLogin = await this.analyzeLogin(user.id, context);
     const authentication = await this.createAuthenticationResponse(
       user,
       context,
     );
-    const auditId = await this.recordAuthAudit(
-      user.id,
-      'LOGIN_SUCCESS',
-      context,
-      suspiciousLogin,
-    );
+    await this.clearFailedLoginState(user.id);
+    await this.recordAuthAudit(user.id, 'LOGIN_SUCCESS', context, {
+      ...suspiciousLogin,
+    });
 
     if (suspiciousLogin.suspicious) {
-      await this.notifySecurityAlert(
+      const unusualAuditId = await this.recordAuthAudit(
+        user.id,
+        'UNUSUAL_LOGIN_ATTEMPT',
+        context,
+        {
+          ...suspiciousLogin,
+          outcome: 'SUCCESS',
+        },
+      );
+      await this.notifySecurityAlertSafely(
         user,
-        auditId,
-        suspiciousLogin.reason === 'RECENT_FAILED_ATTEMPTS'
-          ? 'A successful sign-in followed several failed attempts.'
-          : 'A sign-in from a new device or network was detected.',
+        unusualAuditId,
+        this.loginRiskMessage(suspiciousLogin.reason),
       );
     }
 
     return authentication;
+  }
+
+  async verifyTwoFactorLogin(
+    dto: VerifyTwoFactorLoginDto,
+    context: SessionRequestContext = {},
+  ) {
+    const challenge = await this.prisma.twoFactorChallenge.findUnique({
+      where: { id: dto.challengeId },
+      include: { user: true },
+    });
+    const now = new Date();
+
+    if (
+      !challenge ||
+      challenge.purpose !== TwoFactorChallengePurpose.LOGIN ||
+      challenge.consumedAt ||
+      challenge.expiresAt <= now ||
+      challenge.attempts >= challenge.maxAttempts
+    ) {
+      throw new UnauthorizedException(
+        'Two-factor challenge is invalid or expired',
+      );
+    }
+
+    this.assertUserCanAuthenticate(challenge.user);
+    this.assertTwoFactorRole(challenge.user.role);
+    const valid = this.verifyTwoFactorCode(
+      challenge.method,
+      dto.code,
+      challenge.id,
+      challenge.codeHash,
+      challenge.user.twoFactorSecretEncrypted,
+    );
+
+    if (!valid) {
+      const nextAttempts = challenge.attempts + 1;
+      await this.prisma.twoFactorChallenge.updateMany({
+        where: { id: challenge.id, consumedAt: null },
+        data: {
+          attempts: { increment: 1 },
+          consumedAt: nextAttempts >= challenge.maxAttempts ? now : undefined,
+        },
+      });
+      await this.recordAuthAudit(
+        challenge.userId,
+        'TWO_FACTOR_CHALLENGE_FAILED',
+        context,
+        {
+          method: challenge.method,
+          attempts: nextAttempts,
+          locked: nextAttempts >= challenge.maxAttempts,
+        },
+      );
+      throw new UnauthorizedException('Verification code is invalid');
+    }
+
+    const consumed = await this.prisma.twoFactorChallenge.updateMany({
+      where: {
+        id: challenge.id,
+        consumedAt: null,
+        expiresAt: { gt: now },
+        attempts: challenge.attempts,
+      },
+      data: { consumedAt: now },
+    });
+    if (consumed.count !== 1) {
+      throw new UnauthorizedException(
+        'Two-factor challenge is invalid or expired',
+      );
+    }
+
+    const suspiciousLogin = await this.analyzeLogin(challenge.userId, context);
+    const authentication = await this.createAuthenticationResponse(
+      challenge.user,
+      context,
+    );
+    await this.clearFailedLoginState(challenge.userId);
+    await this.recordAuthAudit(
+      challenge.userId,
+      'TWO_FACTOR_CHALLENGE_COMPLETED',
+      context,
+      { method: challenge.method },
+    );
+    await this.recordAuthAudit(challenge.userId, 'LOGIN_SUCCESS', context, {
+      ...suspiciousLogin,
+      twoFactorMethod: challenge.method,
+    });
+    if (suspiciousLogin.suspicious) {
+      const unusualAuditId = await this.recordAuthAudit(
+        challenge.userId,
+        'UNUSUAL_LOGIN_ATTEMPT',
+        context,
+        {
+          ...suspiciousLogin,
+          outcome: 'SUCCESS',
+          twoFactorMethod: challenge.method,
+        },
+      );
+      await this.notifySecurityAlertSafely(
+        challenge.user,
+        unusualAuditId,
+        this.loginRiskMessage(suspiciousLogin.reason),
+      );
+    }
+
+    return authentication;
+  }
+
+  async getTwoFactorStatus(userId: string) {
+    const user = await this.requireTwoFactorUser(userId);
+    return {
+      requiredForRole: true,
+      enabled: Boolean(user.twoFactorEnabledAt && user.twoFactorMethod),
+      method: user.twoFactorMethod,
+      enabledAt: user.twoFactorEnabledAt,
+      availableMethods: [
+        TwoFactorMethod.EMAIL_OTP,
+        TwoFactorMethod.AUTHENTICATOR,
+      ],
+    };
+  }
+
+  async enableEmailTwoFactor(
+    userId: string,
+    dto: TwoFactorPasswordDto,
+    context: SessionRequestContext = {},
+  ) {
+    const user = await this.requireTwoFactorUser(userId);
+    await this.assertCurrentPassword(user, dto.currentPassword);
+    if (!this.emailProvider?.configured) {
+      throw new BadRequestException(
+        'Email OTP is unavailable until outbound email is configured',
+      );
+    }
+
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.user.update({
+        where: { id: userId },
+        data: {
+          twoFactorMethod: TwoFactorMethod.EMAIL_OTP,
+          twoFactorSecretEncrypted: null,
+          twoFactorEnabledAt: new Date(),
+        },
+      });
+      await transaction.authSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await transaction.twoFactorChallenge.updateMany({
+        where: { userId, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+    });
+    await this.recordAuthAudit(userId, 'TWO_FACTOR_ENABLED', context, {
+      method: TwoFactorMethod.EMAIL_OTP,
+      sessionsRevoked: true,
+    });
+
+    return {
+      message: 'Email two-factor authentication enabled. Sign in again.',
+    };
+  }
+
+  async beginAuthenticatorSetup(
+    userId: string,
+    dto: TwoFactorPasswordDto,
+    context: SessionRequestContext = {},
+  ) {
+    const user = await this.requireTwoFactorUser(userId);
+    await this.assertCurrentPassword(user, dto.currentPassword);
+    const secret = generateAuthenticatorSecret();
+    const encrypted = encryptAuthenticatorSecret(
+      secret,
+      this.twoFactorEncryptionMaterial(),
+    );
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
+
+    await this.prisma.twoFactorChallenge.updateMany({
+      where: {
+        userId,
+        purpose: TwoFactorChallengePurpose.AUTHENTICATOR_SETUP,
+        consumedAt: null,
+      },
+      data: { consumedAt: new Date() },
+    });
+    const challenge = await this.prisma.twoFactorChallenge.create({
+      data: {
+        userId,
+        purpose: TwoFactorChallengePurpose.AUTHENTICATOR_SETUP,
+        method: TwoFactorMethod.AUTHENTICATOR,
+        pendingSecretEncrypted: encrypted,
+        expiresAt,
+      },
+    });
+    await this.recordAuthAudit(
+      userId,
+      'TWO_FACTOR_AUTHENTICATOR_SETUP_STARTED',
+      context,
+    );
+    const issuer = encodeURIComponent('CareTrack');
+    const account = encodeURIComponent(user.email);
+
+    return {
+      challengeId: challenge.id,
+      secret,
+      otpauthUrl: `otpauth://totp/${issuer}:${account}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`,
+      expiresAt,
+    };
+  }
+
+  async confirmAuthenticatorSetup(
+    userId: string,
+    dto: ConfirmAuthenticatorSetupDto,
+    context: SessionRequestContext = {},
+  ) {
+    const user = await this.requireTwoFactorUser(userId);
+    const challenge = await this.prisma.twoFactorChallenge.findFirst({
+      where: {
+        id: dto.challengeId,
+        userId,
+        purpose: TwoFactorChallengePurpose.AUTHENTICATOR_SETUP,
+        method: TwoFactorMethod.AUTHENTICATOR,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    if (!challenge?.pendingSecretEncrypted) {
+      throw new BadRequestException(
+        'Authenticator setup is invalid or expired',
+      );
+    }
+
+    const secret = decryptAuthenticatorSecret(
+      challenge.pendingSecretEncrypted,
+      this.twoFactorEncryptionMaterial(),
+    );
+    if (!verifyTotp(secret, dto.code)) {
+      await this.prisma.twoFactorChallenge.update({
+        where: { id: challenge.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Authenticator code is invalid');
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction(async (transaction) => {
+      const consumed = await transaction.twoFactorChallenge.updateMany({
+        where: {
+          id: challenge.id,
+          userId,
+          consumedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { consumedAt: now },
+      });
+      if (consumed.count !== 1) {
+        throw new BadRequestException(
+          'Authenticator setup is invalid or expired',
+        );
+      }
+      await transaction.user.update({
+        where: { id: user.id },
+        data: {
+          twoFactorMethod: TwoFactorMethod.AUTHENTICATOR,
+          twoFactorSecretEncrypted: challenge.pendingSecretEncrypted,
+          twoFactorEnabledAt: now,
+        },
+      });
+      await transaction.authSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+    });
+    await this.recordAuthAudit(userId, 'TWO_FACTOR_ENABLED', context, {
+      method: TwoFactorMethod.AUTHENTICATOR,
+      sessionsRevoked: true,
+    });
+
+    return {
+      message:
+        'Authenticator two-factor authentication enabled. Sign in again.',
+    };
+  }
+
+  async disableTwoFactor(
+    userId: string,
+    dto: DisableTwoFactorDto,
+    context: SessionRequestContext = {},
+  ) {
+    const user = await this.requireTwoFactorUser(userId);
+    await this.assertCurrentPassword(user, dto.currentPassword);
+    if (!user.twoFactorMethod || !user.twoFactorEnabledAt) {
+      return { message: 'Two-factor authentication is already disabled.' };
+    }
+    if (
+      user.twoFactorMethod === TwoFactorMethod.AUTHENTICATOR &&
+      (!dto.code ||
+        !user.twoFactorSecretEncrypted ||
+        !verifyTotp(
+          decryptAuthenticatorSecret(
+            user.twoFactorSecretEncrypted,
+            this.twoFactorEncryptionMaterial(),
+          ),
+          dto.code,
+        ))
+    ) {
+      throw new UnauthorizedException('Authenticator code is invalid');
+    }
+
+    const priorMethod = user.twoFactorMethod;
+    const now = new Date();
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.user.update({
+        where: { id: userId },
+        data: {
+          twoFactorMethod: null,
+          twoFactorSecretEncrypted: null,
+          twoFactorEnabledAt: null,
+        },
+      });
+      await transaction.authSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      await transaction.twoFactorChallenge.updateMany({
+        where: { userId, consumedAt: null },
+        data: { consumedAt: now },
+      });
+    });
+    await this.recordAuthAudit(userId, 'TWO_FACTOR_DISABLED', context, {
+      method: priorMethod,
+      sessionsRevoked: true,
+    });
+
+    return { message: 'Two-factor authentication disabled. Sign in again.' };
   }
 
   async refresh(
@@ -475,7 +927,13 @@ export class AuthService {
 
       await transaction.user.update({
         where: { id: token.userId },
-        data: { passwordHash, passwordChangedAt: new Date() },
+        data: {
+          passwordHash,
+          passwordChangedAt: new Date(),
+          failedLoginAttempts: 0,
+          lastFailedLoginAt: null,
+          lockedUntil: null,
+        },
       });
       await transaction.authSession.updateMany({
         where: { userId: token.userId, revokedAt: null },
@@ -530,7 +988,13 @@ export class AuthService {
     await this.prisma.$transaction(async (transaction) => {
       await transaction.user.update({
         where: { id: userId },
-        data: { passwordHash, passwordChangedAt: new Date() },
+        data: {
+          passwordHash,
+          passwordChangedAt: new Date(),
+          failedLoginAttempts: 0,
+          lastFailedLoginAt: null,
+          lockedUntil: null,
+        },
       });
       await transaction.authSession.updateMany({
         where: { userId, revokedAt: null },
@@ -562,8 +1026,13 @@ export class AuthService {
 
   async listSecurityEvents(userId: string, limit: number) {
     const actions = [
+      'ACCOUNT_REGISTERED',
       'LOGIN_SUCCESS',
       'LOGIN_FAILED',
+      'UNUSUAL_LOGIN_ATTEMPT',
+      'ACCOUNT_TEMPORARILY_LOCKED',
+      'ACCOUNT_UNLOCKED',
+      'RATE_LIMIT_EXCEEDED',
       'LOGOUT',
       'SESSION_REVOKED',
       'SESSIONS_REVOKED',
@@ -573,6 +1042,14 @@ export class AuthService {
       'PASSWORD_RESET',
       'PASSWORD_RESET_REQUESTED',
       'EMAIL_VERIFIED',
+      'TWO_FACTOR_CHALLENGE_ISSUED',
+      'TWO_FACTOR_CHALLENGE_FAILED',
+      'TWO_FACTOR_CHALLENGE_COMPLETED',
+      'TWO_FACTOR_AUTHENTICATOR_SETUP_STARTED',
+      'TWO_FACTOR_ENABLED',
+      'TWO_FACTOR_DISABLED',
+      'NOTIFICATION_PREFERENCES_UPDATED',
+      'PATIENT_CONSENT_UPDATED',
     ];
     const items = await this.prisma.auditLog.findMany({
       where: { userId, action: { in: actions } },
@@ -697,6 +1174,8 @@ export class AuthService {
         expiresAt,
         createdByIp: context.ipAddress?.slice(0, 128),
         userAgent: context.userAgent?.slice(0, 512),
+        deviceFingerprint: this.deviceFingerprint(context.userAgent),
+        networkFingerprint: this.networkFingerprint(context.ipAddress),
       },
     });
 
@@ -781,20 +1260,169 @@ export class AuthService {
     });
   }
 
+  private requiresTwoFactorChallenge(
+    user: Pick<User, 'role' | 'twoFactorEnabledAt' | 'twoFactorMethod'>,
+  ): boolean {
+    return (
+      (user.role === UserRole.DOCTOR || user.role === UserRole.ADMIN) &&
+      Boolean(user.twoFactorEnabledAt && user.twoFactorMethod)
+    );
+  }
+
+  private async issueTwoFactorLoginChallenge(
+    user: Pick<
+      User,
+      'id' | 'name' | 'email' | 'twoFactorMethod' | 'twoFactorEnabledAt'
+    >,
+  ) {
+    if (!user.twoFactorMethod || !user.twoFactorEnabledAt) {
+      throw new UnauthorizedException(
+        'Two-factor authentication is not set up',
+      );
+    }
+    if (
+      user.twoFactorMethod === TwoFactorMethod.EMAIL_OTP &&
+      !this.emailProvider?.configured
+    ) {
+      throw new BadRequestException(
+        'Email OTP delivery is temporarily unavailable',
+      );
+    }
+
+    const id = randomUUID();
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
+    await this.prisma.twoFactorChallenge.updateMany({
+      where: {
+        userId: user.id,
+        purpose: TwoFactorChallengePurpose.LOGIN,
+        consumedAt: null,
+      },
+      data: { consumedAt: new Date() },
+    });
+    await this.prisma.twoFactorChallenge.create({
+      data: {
+        id,
+        userId: user.id,
+        purpose: TwoFactorChallengePurpose.LOGIN,
+        method: user.twoFactorMethod,
+        codeHash:
+          user.twoFactorMethod === TwoFactorMethod.EMAIL_OTP
+            ? this.hashToken(`${id}:${code}`)
+            : null,
+        expiresAt,
+      },
+    });
+
+    if (user.twoFactorMethod === TwoFactorMethod.EMAIL_OTP) {
+      const result = await this.emailProvider!.send({
+        recipients: [user.email],
+        subject: 'Your CareTrack verification code',
+        text: `Hello ${user.name}, your CareTrack sign-in code is ${code}. It expires in 10 minutes. If you did not try to sign in, change your password.`,
+      });
+      if (result.outcome !== 'DELIVERED') {
+        await this.prisma.twoFactorChallenge.update({
+          where: { id },
+          data: { consumedAt: new Date() },
+        });
+        throw new BadRequestException(
+          'Email OTP delivery is temporarily unavailable',
+        );
+      }
+    }
+
+    return {
+      challengeId: id,
+      method: user.twoFactorMethod,
+      expiresAt,
+    };
+  }
+
+  private verifyTwoFactorCode(
+    method: TwoFactorMethod,
+    candidate: string,
+    challengeId: string,
+    expectedCodeHash: string | null,
+    encryptedAuthenticatorSecret: string | null,
+  ): boolean {
+    if (method === TwoFactorMethod.EMAIL_OTP) {
+      return Boolean(
+        expectedCodeHash &&
+        this.securelyEqual(
+          expectedCodeHash,
+          this.hashToken(`${challengeId}:${candidate}`),
+        ),
+      );
+    }
+
+    if (!encryptedAuthenticatorSecret) return false;
+    try {
+      return verifyTotp(
+        decryptAuthenticatorSecret(
+          encryptedAuthenticatorSecret,
+          this.twoFactorEncryptionMaterial(),
+        ),
+        candidate,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async requireTwoFactorUser(userId: string): Promise<User> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('Account no longer exists');
+    this.assertUserCanAuthenticate(user);
+    this.assertTwoFactorRole(user.role);
+    return user;
+  }
+
+  private assertTwoFactorRole(role: UserRole): void {
+    if (role !== UserRole.DOCTOR && role !== UserRole.ADMIN) {
+      throw new BadRequestException(
+        'Two-factor authentication is available for doctor and admin accounts',
+      );
+    }
+  }
+
+  private async assertCurrentPassword(
+    user: Pick<User, 'passwordHash'>,
+    currentPassword: string,
+  ): Promise<void> {
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+  }
+
+  private twoFactorEncryptionMaterial(): string {
+    const material =
+      this.config?.get<string>('TWO_FACTOR_ENCRYPTION_KEY') ??
+      this.config?.get<string>('JWT_SECRET');
+    if (!material || material.length < 32) {
+      throw new BadRequestException(
+        'Two-factor encryption is not configured securely',
+      );
+    }
+    return material;
+  }
+
   private async analyzeLogin(
     userId: string,
     context: SessionRequestContext,
-  ): Promise<{ suspicious: boolean; reason: string | null }> {
+  ): Promise<LoginRiskAnalysis> {
     const recentFailures = await this.recentLoginFailureCount(
       userId,
       context.ipAddress,
     );
-    if (recentFailures >= 3) {
-      return { suspicious: true, reason: 'RECENT_FAILED_ATTEMPTS' };
+    const signals: string[] = [];
+    let riskScore = 0;
+    if (recentFailures >= this.loginWarningThreshold()) {
+      signals.push('RECENT_FAILED_ATTEMPTS');
+      riskScore += 2;
     }
 
     if (!this.prisma.authSession?.findFirst) {
-      return { suspicious: false, reason: null };
+      return this.loginRiskResult(signals, riskScore);
     }
 
     const anyPreviousSession = await this.prisma.authSession.findFirst({
@@ -802,30 +1430,225 @@ export class AuthService {
       select: { id: true },
     });
     if (!anyPreviousSession) {
-      return { suspicious: false, reason: null };
+      // The first successful sign-in establishes a baseline and is not
+      // labelled abnormal merely because there is no history yet.
+      return this.loginRiskResult(signals, riskScore);
     }
 
-    const knownContext: Prisma.AuthSessionWhereInput[] = [];
-    if (context.ipAddress) {
-      knownContext.push({
-        createdByIp: context.ipAddress.slice(0, 128),
-      });
-    }
+    const deviceFingerprint = this.deviceFingerprint(context.userAgent);
+    const networkFingerprint = this.networkFingerprint(context.ipAddress);
+    const deviceCandidates: Prisma.AuthSessionWhereInput[] = [];
+    const networkCandidates: Prisma.AuthSessionWhereInput[] = [];
+    if (deviceFingerprint) deviceCandidates.push({ deviceFingerprint });
     if (context.userAgent) {
-      knownContext.push({ userAgent: context.userAgent.slice(0, 512) });
+      deviceCandidates.push({ userAgent: context.userAgent.slice(0, 512) });
     }
-    if (knownContext.length === 0) {
-      return { suspicious: false, reason: null };
+    if (networkFingerprint) networkCandidates.push({ networkFingerprint });
+    if (context.ipAddress) {
+      networkCandidates.push({ createdByIp: context.ipAddress.slice(0, 128) });
     }
 
-    const recognizedSession = await this.prisma.authSession.findFirst({
-      where: { userId, OR: knownContext },
-      select: { id: true },
+    const [recognizedDevice, recognizedNetwork, recentSessions] =
+      await Promise.all([
+        deviceCandidates.length > 0
+          ? this.prisma.authSession.findFirst({
+              where: { userId, OR: deviceCandidates },
+              select: { id: true },
+            })
+          : Promise.resolve({ id: 'context-unavailable' }),
+        networkCandidates.length > 0
+          ? this.prisma.authSession.findFirst({
+              where: { userId, OR: networkCandidates },
+              select: { id: true },
+            })
+          : Promise.resolve({ id: 'context-unavailable' }),
+        deviceFingerprint && networkFingerprint
+          ? this.prisma.authSession.findMany({
+              where: {
+                userId,
+                createdAt: { gte: new Date(Date.now() - 10 * 60_000) },
+              },
+              select: {
+                deviceFingerprint: true,
+                networkFingerprint: true,
+                userAgent: true,
+                createdByIp: true,
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+            })
+          : Promise.resolve<LoginSessionContext[]>([]),
+      ]);
+
+    if (!recognizedDevice && deviceFingerprint) {
+      signals.push('NEW_DEVICE');
+      riskScore += 1;
+    }
+    if (!recognizedNetwork && networkFingerprint) {
+      signals.push('NEW_NETWORK');
+      riskScore += 1;
+    }
+
+    const rapidContextChange = recentSessions.some((session) => {
+      const priorDevice =
+        session.deviceFingerprint ?? this.deviceFingerprint(session.userAgent);
+      const priorNetwork =
+        session.networkFingerprint ??
+        this.networkFingerprint(session.createdByIp);
+      return (
+        priorDevice !== undefined &&
+        priorNetwork !== undefined &&
+        priorDevice !== deviceFingerprint &&
+        priorNetwork !== networkFingerprint
+      );
+    });
+    if (rapidContextChange) {
+      signals.push('RAPID_CONTEXT_CHANGE');
+      riskScore += 2;
+    }
+
+    return this.loginRiskResult(signals, riskScore);
+  }
+
+  private loginRiskResult(
+    signals: string[],
+    riskScore: number,
+  ): LoginRiskAnalysis {
+    const suspicious = riskScore >= 2;
+    const reason = !suspicious
+      ? null
+      : signals.includes('RECENT_FAILED_ATTEMPTS')
+        ? 'RECENT_FAILED_ATTEMPTS'
+        : signals.includes('RAPID_CONTEXT_CHANGE')
+          ? 'RAPID_CONTEXT_CHANGE'
+          : 'NEW_DEVICE_AND_NETWORK';
+
+    return { suspicious, reason, riskScore, signals };
+  }
+
+  private async registerFailedLogin(
+    user: Pick<
+      User,
+      'id' | 'failedLoginAttempts' | 'lastFailedLoginAt' | 'lockedUntil'
+    >,
+    now: Date,
+  ) {
+    const windowStartedAt = new Date(
+      now.getTime() - this.loginFailureWindowMinutes() * 60_000,
+    );
+    const isContinuingSequence = Boolean(
+      user.lastFailedLoginAt && user.lastFailedLoginAt >= windowStartedAt,
+    );
+    const accountFailureCount = isContinuingSequence
+      ? user.failedLoginAttempts + 1
+      : 1;
+    const alreadyLocked = this.isLoginLocked(user, now);
+    const newlyLocked =
+      !alreadyLocked && accountFailureCount >= this.loginLockThreshold();
+    const lockedUntil = alreadyLocked
+      ? user.lockedUntil
+      : newlyLocked
+        ? new Date(now.getTime() + this.loginLockMinutes() * 60_000)
+        : null;
+
+    await this.prisma.user.updateMany({
+      where: { id: user.id },
+      data: {
+        failedLoginAttempts: accountFailureCount,
+        lastFailedLoginAt: now,
+        lockedUntil,
+      },
     });
 
-    return recognizedSession
-      ? { suspicious: false, reason: null }
-      : { suspicious: true, reason: 'NEW_DEVICE_OR_NETWORK' };
+    return { accountFailureCount, newlyLocked, lockedUntil };
+  }
+
+  private async clearFailedLoginState(userId: string): Promise<void> {
+    await this.prisma.user.updateMany({
+      where: {
+        id: userId,
+        OR: [
+          { failedLoginAttempts: { gt: 0 } },
+          { lastFailedLoginAt: { not: null } },
+          { lockedUntil: { not: null } },
+        ],
+      },
+      data: {
+        failedLoginAttempts: 0,
+        lastFailedLoginAt: null,
+        lockedUntil: null,
+      },
+    });
+  }
+
+  private isLoginLocked(
+    user: Pick<User, 'lockedUntil'>,
+    now = new Date(),
+  ): boolean {
+    return Boolean(user.lockedUntil && user.lockedUntil > now);
+  }
+
+  private loginRiskMessage(reason: string | null): string {
+    if (reason === 'RECENT_FAILED_ATTEMPTS') {
+      return 'A successful sign-in followed several unsuccessful attempts.';
+    }
+    if (reason === 'RAPID_CONTEXT_CHANGE') {
+      return 'Sign-ins from different devices and networks occurred close together.';
+    }
+    return 'A sign-in from both a new device and a new network was detected.';
+  }
+
+  private deviceFingerprint(userAgent: string | null | undefined) {
+    if (!userAgent?.trim()) return undefined;
+    const normalized = userAgent.trim().toLowerCase().replace(/\s+/g, ' ');
+    return this.hashToken(`device:${normalized}`);
+  }
+
+  private networkFingerprint(ipAddress: string | null | undefined) {
+    const identity = this.networkIdentity(ipAddress);
+    return identity ? this.hashToken(`network:${identity}`) : undefined;
+  }
+
+  private networkIdentity(ipAddress: string | null | undefined) {
+    if (!ipAddress?.trim()) return undefined;
+    let address = ipAddress.trim().toLowerCase().split('%', 1)[0];
+    if (address.startsWith('::ffff:')) address = address.slice(7);
+
+    if (isIP(address) === 4) {
+      const octets = address.split('.');
+      return `${octets[0]}.${octets[1]}.${octets[2]}.0/24`;
+    }
+    if (isIP(address) !== 6) return undefined;
+
+    const [left = '', right = ''] = address.split('::');
+    const leftGroups = left ? left.split(':') : [];
+    const rightGroups = right ? right.split(':') : [];
+    const missingGroups = Math.max(
+      0,
+      8 - leftGroups.length - rightGroups.length,
+    );
+    const expanded = [
+      ...leftGroups,
+      ...Array.from({ length: missingGroups }, () => '0'),
+      ...rightGroups,
+    ].map((group) => Number.parseInt(group || '0', 16).toString(16));
+    return `${expanded.slice(0, 4).join(':')}::/64`;
+  }
+
+  private loginFailureWindowMinutes(): number {
+    return this.numberConfig('LOGIN_FAILURE_WINDOW_MINUTES', 15, 5, 120);
+  }
+
+  private loginWarningThreshold(): number {
+    return this.numberConfig('LOGIN_WARNING_THRESHOLD', 3, 2, 20);
+  }
+
+  private loginLockThreshold(): number {
+    return this.numberConfig('LOGIN_LOCK_THRESHOLD', 10, 5, 50);
+  }
+
+  private loginLockMinutes(): number {
+    return this.numberConfig('LOGIN_LOCK_MINUTES', 15, 5, 1440);
   }
 
   private async recentLoginFailureCount(
@@ -841,7 +1664,9 @@ export class AuthService {
     return this.prisma.auditLog.count({
       where: {
         action: 'LOGIN_FAILED',
-        createdAt: { gte: new Date(Date.now() - 15 * 60_000) },
+        createdAt: {
+          gte: new Date(Date.now() - this.loginFailureWindowMinutes() * 60_000),
+        },
         OR: identities,
       },
     });
@@ -851,7 +1676,7 @@ export class AuthService {
     userId: string | undefined,
     action: string,
     context: SessionRequestContext = {},
-    metadata: Record<string, string | number | boolean | null | undefined> = {},
+    metadata: Record<string, Prisma.InputJsonValue | null | undefined> = {},
   ): Promise<string | undefined> {
     if (!this.prisma.auditLog?.create) return undefined;
 
@@ -956,6 +1781,21 @@ export class AuthService {
           errorCode: result.errorCode,
         },
       });
+    }
+  }
+
+  private async notifySecurityAlertSafely(
+    user: Pick<User, 'id' | 'email' | 'name'>,
+    auditId: string | undefined,
+    message: string,
+  ): Promise<void> {
+    try {
+      await this.notifySecurityAlert(user, auditId, message);
+    } catch (error) {
+      // Alert delivery must never turn a valid login into a failed login.
+      const code =
+        error instanceof Error ? error.constructor.name : 'UnknownError';
+      this.logger.warn(`Could not deliver login security alert (${code})`);
     }
   }
 

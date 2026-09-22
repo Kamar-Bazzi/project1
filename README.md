@@ -8,6 +8,10 @@ and a React/Vite web client.
 
 - Patient medications, dose history, measurements, wearable metrics, health
   alerts, emergency contacts, appointments, and notifications
+- Transparent wellness indicators, daily check-ins, symptom links, medication
+  refill tracking, and reference-based possible-interaction review
+- Doctor-authored follow-up plans and private, malware-screened patient
+  documents with active-assignment access control
 - Doctor access that requires an active patient assignment for every clinical
   read
 - Administrative account, role, assignment, and audit-log management
@@ -51,8 +55,10 @@ npm run build
 npm audit --omit=dev
 
 cd ../frontend
+npm run test:run
 npm run lint
 npm run build
+npm audit --omit=dev
 ```
 
 ## Documentation
@@ -61,9 +67,11 @@ npm run build
 - [API reference](docs/api-reference.md)
 - [Architecture and diagrams](docs/architecture.md)
 - [Security model and verification](docs/security.md)
+- [UAT and production-readiness checklist](docs/uat-readiness.md)
 - [Production deployment, HTTPS, and backups](docs/deployment.md)
 - [Backup/restore verification evidence](docs/backup-restore-evidence.md)
 - [Wearable-health boundary](docs/wearable-health.md)
+- [Wellness, medication-review, and document safety](docs/wellness-safety.md)
 
 Production secrets belong in the deployment platform's secret manager or an
 untracked `.env.production`; start from `.env.production.example`. Never place

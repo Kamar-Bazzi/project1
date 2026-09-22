@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   AccountStatus,
@@ -19,6 +20,7 @@ import {
   DEFAULT_TIME_ZONE,
 } from '../common/validators/is-iana-time-zone.validator';
 import { PrismaService } from '../prisma/prisma.service';
+import { DataRetentionService } from '../data-retention/data-retention.service';
 import { AdminDoctorQueryDto } from './dto/admin-doctor-query.dto';
 import {
   AdminUserQueryDto,
@@ -27,6 +29,7 @@ import {
 } from './dto/admin-user.dto';
 import { AssignmentQueryDto, CreateAssignmentDto } from './dto/assignment.dto';
 import { AuditLogQueryDto } from './dto/audit-log-query.dto';
+import { SecurityDashboardQueryDto } from './dto/security-dashboard-query.dto';
 
 const adminUserSelect = {
   id: true,
@@ -34,6 +37,9 @@ const adminUserSelect = {
   email: true,
   role: true,
   accountStatus: true,
+  failedLoginAttempts: true,
+  lastFailedLoginAt: true,
+  lockedUntil: true,
   emailVerifiedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -94,6 +100,10 @@ const assignmentInclude = {
 
 const SECURITY_AUDIT_ACTIONS = [
   'LOGIN_FAILED',
+  'UNUSUAL_LOGIN_ATTEMPT',
+  'ACCOUNT_TEMPORARILY_LOCKED',
+  'ACCOUNT_UNLOCKED',
+  'RATE_LIMIT_EXCEEDED',
   'REFRESH_TOKEN_REUSE',
   'PASSWORD_CHANGE_FAILED',
   'PASSWORD_CHANGED',
@@ -108,7 +118,10 @@ const SECURITY_AUDIT_ACTIONS = [
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly dataRetention?: DataRetentionService,
+  ) {}
 
   async getDashboard() {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1_000);
@@ -200,6 +213,167 @@ export class AdminService {
       recentAuditLogs,
       recentSecurityActivity,
     };
+  }
+
+  async getSecurityDashboard(query: SecurityDashboardQueryDto) {
+    const now = new Date();
+    const since = new Date(now.getTime() - query.hours * 60 * 60_000);
+    const auditUser = {
+      select: { id: true, name: true, email: true, role: true },
+    } as const;
+    const [
+      failedLoginCount,
+      lockedAccountCount,
+      unusualAccessAttemptCount,
+      rateLimitEventCount,
+      securityEventCount,
+      failedLogins,
+      lockedAccounts,
+      unusualAccessAttempts,
+      rateLimitEvents,
+      recentAuditActivity,
+    ] = await Promise.all([
+      this.prisma.auditLog.count({
+        where: { action: 'LOGIN_FAILED', createdAt: { gte: since } },
+      }),
+      this.prisma.user.count({
+        where: {
+          accountStatus: AccountStatus.ACTIVE,
+          lockedUntil: { gt: now },
+        },
+      }),
+      this.prisma.auditLog.count({
+        where: {
+          action: 'UNUSUAL_LOGIN_ATTEMPT',
+          createdAt: { gte: since },
+        },
+      }),
+      this.prisma.auditLog.count({
+        where: {
+          action: 'RATE_LIMIT_EXCEEDED',
+          createdAt: { gte: since },
+        },
+      }),
+      this.prisma.auditLog.count({
+        where: {
+          action: { in: SECURITY_AUDIT_ACTIONS },
+          createdAt: { gte: since },
+        },
+      }),
+      this.prisma.auditLog.findMany({
+        where: { action: 'LOGIN_FAILED', createdAt: { gte: since } },
+        include: { user: auditUser },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: query.limit,
+      }),
+      this.prisma.user.findMany({
+        where: {
+          accountStatus: AccountStatus.ACTIVE,
+          lockedUntil: { gt: now },
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          failedLoginAttempts: true,
+          lastFailedLoginAt: true,
+          lockedUntil: true,
+        },
+        orderBy: [{ lockedUntil: 'desc' }, { id: 'asc' }],
+        take: query.limit,
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'UNUSUAL_LOGIN_ATTEMPT',
+          createdAt: { gte: since },
+        },
+        include: { user: auditUser },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: query.limit,
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'RATE_LIMIT_EXCEEDED',
+          createdAt: { gte: since },
+        },
+        include: { user: auditUser },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: query.limit,
+      }),
+      this.prisma.auditLog.findMany({
+        include: { user: auditUser },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: query.limit,
+      }),
+    ]);
+
+    return {
+      window: { hours: query.hours, since, until: now },
+      summary: {
+        failedLogins: failedLoginCount,
+        lockedAccounts: lockedAccountCount,
+        unusualAccessAttempts: unusualAccessAttemptCount,
+        rateLimitEvents: rateLimitEventCount,
+        securityEvents: securityEventCount,
+      },
+      failedLogins,
+      lockedAccounts,
+      unusualAccessAttempts,
+      rateLimitEvents,
+      recentAuditActivity,
+    };
+  }
+
+  getRetentionPolicies() {
+    return this.dataRetention?.getPolicies() ?? {};
+  }
+
+  async unlockAccount(actorUserId: string, targetUserId: string) {
+    return this.prisma.$transaction(async (transaction) => {
+      const user = await transaction.user.findUnique({
+        where: { id: targetUserId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          failedLoginAttempts: true,
+          lastFailedLoginAt: true,
+          lockedUntil: true,
+        },
+      });
+      if (!user) throw new NotFoundException('User not found');
+
+      const unlocked = await transaction.user.update({
+        where: { id: targetUserId },
+        data: {
+          failedLoginAttempts: 0,
+          lastFailedLoginAt: null,
+          lockedUntil: null,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          failedLoginAttempts: true,
+          lastFailedLoginAt: true,
+          lockedUntil: true,
+        },
+      });
+      await this.recordAudit(transaction, {
+        userId: actorUserId,
+        action: 'ACCOUNT_UNLOCKED',
+        entity: 'User',
+        entityId: targetUserId,
+        metadata: {
+          previousFailedLoginAttempts: user.failedLoginAttempts,
+          previousLockedUntil: user.lockedUntil?.toISOString() ?? null,
+        },
+      });
+      return unlocked;
+    });
   }
 
   async findUsers(query: AdminUserQueryDto) {

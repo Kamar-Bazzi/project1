@@ -47,6 +47,8 @@ describe('Security controls (e2e)', () => {
   let jwtService: JwtService;
   const originalEnvironment = {
     jwtSecret: process.env.JWT_SECRET,
+    jwtIssuer: process.env.JWT_ISSUER,
+    jwtAudience: process.env.JWT_AUDIENCE,
     swaggerEnabled: process.env.SWAGGER_ENABLED,
   };
 
@@ -182,6 +184,8 @@ describe('Security controls (e2e)', () => {
 
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
+    process.env.JWT_ISSUER = '';
+    process.env.JWT_AUDIENCE = '';
     process.env.SWAGGER_ENABLED = 'false';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -205,6 +209,8 @@ describe('Security controls (e2e)', () => {
   afterAll(async () => {
     await app.close();
     restoreEnvironmentVariable('JWT_SECRET', originalEnvironment.jwtSecret);
+    restoreEnvironmentVariable('JWT_ISSUER', originalEnvironment.jwtIssuer);
+    restoreEnvironmentVariable('JWT_AUDIENCE', originalEnvironment.jwtAudience);
     restoreEnvironmentVariable(
       'SWAGGER_ENABLED',
       originalEnvironment.swaggerEnabled,

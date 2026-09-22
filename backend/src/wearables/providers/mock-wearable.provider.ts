@@ -7,11 +7,19 @@ import {
 
 import {
   WearableProviderAdapter,
+  WearableProviderConnectInput,
+  WearableProviderConnection,
   WearableProviderDevice,
   WearableProviderMeasurement,
+  WearableProviderOperationResult,
+  WearableProviderSyncResult,
+  WearableProviderError,
+  WearableProviderErrorCode,
 } from './wearable-provider.interface';
 
 const MOCK_TIME_BUCKET_MS = 5 * 60 * 1000;
+export const MOCK_EXTERNAL_DEVICE_ID = 'demo-watch';
+export const MOCK_DEVICE_NAME = 'Demo Watch';
 export const MOCK_HEALTH_DATA_DISCLAIMER =
   'Generated demo data; not a real medical reading.';
 
@@ -26,6 +34,56 @@ interface MockMetricDefinition {
 export class MockWearableProvider implements WearableProviderAdapter {
   readonly provider = WearableProvider.MOCK;
   readonly isDemo = true;
+  readonly supportsConnection = true;
+  readonly connectionKind = 'demo' as const;
+
+  connect(
+    input: WearableProviderConnectInput,
+  ): Promise<WearableProviderConnection> {
+    return Promise.resolve({
+      provider: this.provider,
+      deviceName: input.deviceName ?? MOCK_DEVICE_NAME,
+      externalDeviceId: MOCK_EXTERNAL_DEVICE_ID,
+    });
+  }
+
+  disconnect(): Promise<WearableProviderOperationResult> {
+    return Promise.resolve({ success: true });
+  }
+
+  sync(device: WearableProviderDevice): Promise<WearableProviderSyncResult> {
+    return Promise.resolve({
+      measurements: this.generateDemoMeasurements(device),
+    });
+  }
+
+  refreshAuthentication(): Promise<WearableProviderOperationResult> {
+    return Promise.resolve({ success: true });
+  }
+
+  normalizeProviderMetrics(rawMetrics: unknown): WearableProviderMeasurement[] {
+    if (!Array.isArray(rawMetrics)) {
+      throw new WearableProviderError(
+        WearableProviderErrorCode.NORMALIZATION_FAILED,
+        'Mock provider metrics must be an array',
+      );
+    }
+
+    return rawMetrics as WearableProviderMeasurement[];
+  }
+
+  handleProviderError(error: unknown): WearableProviderError {
+    if (error instanceof WearableProviderError) {
+      return error;
+    }
+
+    return new WearableProviderError(
+      WearableProviderErrorCode.SYNC_FAILED,
+      'Mock wearable provider failed',
+      true,
+      error,
+    );
+  }
 
   generateDemoMeasurements(
     device: WearableProviderDevice,

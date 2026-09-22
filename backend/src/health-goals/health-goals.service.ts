@@ -32,7 +32,7 @@ const GOAL_UNITS: Record<HealthGoalMetric, string> = {
   [HealthGoalMetric.BLOOD_PRESSURE]: 'mmHg',
   [HealthGoalMetric.BLOOD_GLUCOSE]: 'mg/dL',
   [HealthGoalMetric.OXYGEN_SATURATION]: '%',
-  [HealthGoalMetric.SLEEP_DURATION]: 'minutes',
+  [HealthGoalMetric.SLEEP_DURATION]: 'hours',
   [HealthGoalMetric.MEDICATION_ADHERENCE]: '%',
 };
 
@@ -330,7 +330,10 @@ export class HealthGoalsService {
     targetDate?: string | Date | null;
   }): void {
     const canonicalUnit = GOAL_UNITS[goal.metric];
-    if (goal.unit !== canonicalUnit) {
+    const isLegacySleepUnit =
+      goal.metric === HealthGoalMetric.SLEEP_DURATION &&
+      goal.unit === 'minutes';
+    if (goal.unit !== canonicalUnit && !isLegacySleepUnit) {
       throw new BadRequestException(
         `unit must be "${canonicalUnit}" for ${goal.metric} goals`,
       );
@@ -429,6 +432,7 @@ export class HealthGoalsService {
       id: string;
       metric: HealthGoalMetric;
       startDate: Date;
+      unit?: string;
     },
   ): Promise<DerivedGoalProgress | null> {
     const now = new Date();
@@ -464,10 +468,28 @@ export class HealthGoalsService {
       });
       return metric
         ? this.automaticProgress(
-            metric.value,
+            goal.unit === 'hours' ? metric.value / 60 : metric.value,
             metric.secondaryValue,
             metric.measuredAt,
             'latest sleep duration wearable metric',
+          )
+        : null;
+    }
+
+    if (goal.metric === HealthGoalMetric.DAILY_ACTIVITY_MINUTES) {
+      const checkIn = await this.prisma.dailyCheckIn.findFirst({
+        where: {
+          patientId,
+          localDate: new Date(`${today.dateKey}T00:00:00.000Z`),
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+      return checkIn
+        ? this.automaticProgress(
+            checkIn.activityMinutes,
+            null,
+            checkIn.updatedAt,
+            'today daily check-in exercise minutes',
           )
         : null;
     }

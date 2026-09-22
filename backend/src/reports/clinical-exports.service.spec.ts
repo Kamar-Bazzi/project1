@@ -1,6 +1,9 @@
 import { Prisma, UserRole } from '@prisma/client';
 
-import { ClinicalAccessService } from '../common/clinical-access/clinical-access.service';
+import {
+  ClinicalAccessService,
+  FULL_CLINICAL_DATA_PERMISSIONS,
+} from '../common/clinical-access/clinical-access.service';
 import { HealthAuditService } from '../common/health-audit/health-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClinicalExportsService } from './clinical-exports.service';
@@ -38,7 +41,9 @@ describe('ClinicalExportsService', () => {
         resolvePatientForActor: jest.fn().mockResolvedValue({
           patient,
           doctor: { id: 'doctor-id' },
+          permissions: FULL_CLINICAL_DATA_PERMISSIONS,
         }),
+        assertCategoryAllowed: jest.fn(),
       } as unknown as ClinicalAccessService,
       {
         record: jest.fn().mockResolvedValue(undefined),
@@ -63,6 +68,7 @@ describe('ClinicalExportsService', () => {
       doctorAccessGrants: {
         some: {
           active: true,
+          measurementsAllowed: true,
           doctor: { userId: 'doctor-user' },
         },
       },
@@ -86,7 +92,9 @@ describe('ClinicalExportsService', () => {
         resolvePatientForActor: jest.fn().mockResolvedValue({
           patient,
           doctor: null,
+          permissions: FULL_CLINICAL_DATA_PERMISSIONS,
         }),
+        assertCategoryAllowed: jest.fn(),
       } as unknown as ClinicalAccessService,
       {
         record: jest.fn().mockResolvedValue(undefined),

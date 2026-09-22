@@ -16,6 +16,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppointmentQueryDto } from './dto/appointment-query.dto';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
+import { DoctorAvailabilityService } from './doctor-availability.service';
 
 export interface AppointmentActor {
   id: string;
@@ -56,7 +57,10 @@ const appointmentInclude = {
 
 @Injectable()
 export class AppointmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly doctorAvailability: DoctorAvailabilityService,
+  ) {}
 
   async findAll(actor: AppointmentActor, query: AppointmentQueryDto) {
     this.assertDateRange(query.from, query.to);
@@ -167,11 +171,20 @@ export class AppointmentsService {
           dto,
         );
 
+        const { appointmentEnd, durationMinutes } =
+          await this.doctorAvailability.assertBookable(
+            transaction,
+            doctorId,
+            appointmentDate,
+            dto.durationMinutes,
+          );
+
         await this.assertTimeAvailable(
           transaction,
           patientId,
           doctorId,
           appointmentDate,
+          appointmentEnd,
         );
 
         const appointment = await transaction.appointment.create({
@@ -179,6 +192,8 @@ export class AppointmentsService {
             patientId,
             doctorId,
             appointmentDate,
+            appointmentEnd,
+            durationMinutes,
             notes: dto.notes ?? null,
           },
           include: appointmentInclude,
@@ -240,13 +255,26 @@ export class AppointmentsService {
           ? new Date(dto.appointmentDate)
           : existing.appointmentDate;
 
-        if (dto.appointmentDate) {
+        let appointmentEnd = existing.appointmentEnd;
+        let durationMinutes = existing.durationMinutes;
+
+        if (dto.appointmentDate || dto.durationMinutes !== undefined) {
           this.assertFutureAppointment(appointmentDate);
+          const bookable = await this.doctorAvailability.assertBookable(
+            transaction,
+            existing.doctorId,
+            appointmentDate,
+            dto.durationMinutes ??
+              (dto.appointmentDate ? undefined : existing.durationMinutes),
+          );
+          appointmentEnd = bookable.appointmentEnd;
+          durationMinutes = bookable.durationMinutes;
           await this.assertTimeAvailable(
             transaction,
             existing.patientId,
             existing.doctorId,
             appointmentDate,
+            appointmentEnd,
             existing.id,
           );
         }
@@ -256,6 +284,16 @@ export class AppointmentsService {
           data: {
             appointmentDate:
               dto.appointmentDate === undefined ? undefined : appointmentDate,
+            appointmentEnd:
+              dto.appointmentDate === undefined &&
+              dto.durationMinutes === undefined
+                ? undefined
+                : appointmentEnd,
+            durationMinutes:
+              dto.appointmentDate === undefined &&
+              dto.durationMinutes === undefined
+                ? undefined
+                : durationMinutes,
             status: dto.status,
             notes: dto.notes,
           },
@@ -470,13 +508,15 @@ export class AppointmentsService {
     patientId: string,
     doctorId: string,
     appointmentDate: Date,
+    appointmentEnd: Date,
     excludeId?: string,
   ): Promise<void> {
     const collision = await transaction.appointment.findFirst({
       where: {
         id: excludeId ? { not: excludeId } : undefined,
-        appointmentDate,
         status: AppointmentStatus.SCHEDULED,
+        appointmentDate: { lt: appointmentEnd },
+        appointmentEnd: { gt: appointmentDate },
         OR: [{ patientId }, { doctorId }],
       },
       select: { id: true },
@@ -484,7 +524,7 @@ export class AppointmentsService {
 
     if (collision) {
       throw new ConflictException(
-        'The patient or doctor already has an appointment at this time',
+        'The patient or doctor already has an overlapping appointment',
       );
     }
   }
@@ -548,10 +588,10 @@ export class AppointmentsService {
   private rethrowAppointmentConflict(error: unknown): never {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
+      (error.code === 'P2002' || error.code === 'P2004')
     ) {
       throw new ConflictException(
-        'The patient or doctor already has an appointment at this time',
+        'The patient or doctor already has an overlapping appointment',
       );
     }
 

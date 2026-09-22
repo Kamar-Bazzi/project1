@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import {
@@ -25,6 +26,7 @@ import {
   type AuthenticatedUser,
   type UserRole,
 } from "../../services/auth.service";
+import { usePreferences } from "../../preferences";
 import { AuthContext } from "./auth-context";
 
 interface ProtectedRouteProps {
@@ -40,6 +42,7 @@ type AuthState =
 export default function ProtectedRoute({
   allowedRoles,
 }: ProtectedRouteProps) {
+  const { t } = usePreferences();
   const location = useLocation();
   const navigate = useNavigate();
   const [validationAttempt, setValidationAttempt] = useState(0);
@@ -101,7 +104,7 @@ export default function ProtectedRoute({
           status: "error",
           message: getApiErrorMessage(
             error,
-            "We could not verify your session. Please try again.",
+            t("session.errorFallback"),
           ),
         });
       }
@@ -112,14 +115,14 @@ export default function ProtectedRoute({
     return () => {
       isCancelled = true;
     };
-  }, [validationAttempt]);
+  }, [t, validationAttempt]);
 
   if (authState.status === "loading") {
     return (
-      <main className="auth-state-page" aria-live="polite">
+      <main className="auth-state-page" aria-busy="true" aria-live="polite">
         <div className="auth-state-card">
-          <h1>Checking your session</h1>
-          <p>Please wait while we securely load your account.</p>
+          <h1>{t("session.checkingTitle")}</h1>
+          <p>{t("session.checkingDescription")}</p>
         </div>
       </main>
     );
@@ -139,7 +142,7 @@ export default function ProtectedRoute({
     return (
       <main className="auth-state-page" role="alert">
         <div className="auth-state-card">
-          <h1>Session check failed</h1>
+          <h1>{t("session.errorTitle")}</h1>
           <p>{authState.message}</p>
 
           <div className="auth-state-actions">
@@ -150,7 +153,7 @@ export default function ProtectedRoute({
                 setValidationAttempt((attempt) => attempt + 1)
               }
             >
-              Try again
+              {t("session.tryAgain")}
             </button>
 
             <button
@@ -158,7 +161,7 @@ export default function ProtectedRoute({
               className="secondary-button"
               onClick={logout}
             >
-              Return to login
+              {t("session.returnToLogin")}
             </button>
           </div>
         </div>
@@ -194,31 +197,58 @@ interface SessionHeaderProps {
 }
 
 function SessionHeader({ user, onLogout }: SessionHeaderProps) {
+  const { locale, setLocale, theme, toggleTheme, t } = usePreferences();
   const [isOpen, setIsOpen] = useState(false);
+  const navigationToggleRef = useRef<HTMLButtonElement>(null);
+  const moreNavigationRef = useRef<HTMLDetailsElement>(null);
   const homePath = getRoleHomePath(user.role);
+  const closeNavigation = useCallback(() => {
+    setIsOpen(false);
+    if (moreNavigationRef.current) moreNavigationRef.current.open = false;
+  }, []);
+
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent): void {
+      if (
+        event.key === "Escape" &&
+        (isOpen || Boolean(moreNavigationRef.current?.open))
+      ) {
+        closeNavigation();
+        navigationToggleRef.current?.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [closeNavigation, isOpen]);
+
   const patientLinks = [
-    { to: "/dashboard", label: "Dashboard" },
-    { to: "/medications", label: "Medications" },
-    { to: "/appointments", label: "Appointments" },
-    { to: "/history", label: "History" },
-    { to: "/reports", label: "Reports" },
-    { to: "/emergency", label: "I feel unwell" },
+    { to: "/dashboard", label: t("navigation.dashboard") },
+    { to: "/medications", label: t("navigation.medications") },
+    { to: "/appointments", label: t("navigation.appointments") },
+    { to: "/history", label: t("navigation.history") },
+    { to: "/reports", label: t("navigation.reports") },
+    { to: "/emergency", label: t("navigation.emergency") },
   ];
   const patientMoreLinks = [
-    { to: "/measurements", label: "Measurements" },
-    { to: "/health", label: "Health & alerts" },
-    { to: "/goals", label: "Health goals" },
-    { to: "/wearables", label: "Wearables" },
-    { to: "/profile", label: "Profile" },
-    { to: "/notifications", label: "Notifications" },
-    { to: "/security", label: "Security" },
+    { to: "/measurements", label: t("navigation.measurements") },
+    { to: "/health", label: t("navigation.health") },
+    { to: "/goals", label: t("navigation.goals") },
+    { to: "/wearables", label: t("navigation.wearables") },
+    { to: "/check-ins", label: t("navigation.checkIns") },
+    { to: "/symptoms", label: t("navigation.symptoms") },
+    { to: "/documents", label: t("navigation.documents") },
+    { to: "/profile", label: t("navigation.profile") },
+    { to: "/notifications", label: t("navigation.notifications") },
+    { to: "/security", label: t("navigation.security") },
+    { to: "/privacy", label: t("navigation.privacy") },
   ];
   const links = user.role === "PATIENT"
     ? patientLinks
     : [
-        { to: homePath, label: "Dashboard" },
-        { to: "/notifications", label: "Notifications" },
-        { to: "/security", label: "Security" },
+        { to: homePath, label: t("navigation.dashboard") },
+        { to: "/notifications", label: t("navigation.notifications") },
+        { to: "/security", label: t("navigation.security") },
       ];
 
   return (
@@ -229,32 +259,33 @@ function SessionHeader({ user, onLogout }: SessionHeaderProps) {
             +
           </span>
           <span>
-            <strong>CareTrack</strong>
-            <small>Health companion</small>
+            <strong>{t("app.name")}</strong>
+            <small>{t("app.tagline")}</small>
           </span>
         </Link>
 
         <button
+          ref={navigationToggleRef}
           type="button"
           className="navigation-toggle"
           aria-expanded={isOpen}
           aria-controls="primary-navigation"
+          aria-label={t("navigation.toggle")}
           onClick={() => setIsOpen((current) => !current)}
         >
           <span aria-hidden="true">☰</span>
-          <span className="sr-only">Toggle navigation</span>
         </button>
 
         <div
           id="primary-navigation"
           className={`app-navigation-wrap${isOpen ? " is-open" : ""}`}
         >
-          <nav className="app-navigation" aria-label="Main navigation">
+          <nav className="app-navigation" aria-label={t("navigation.main")}>
             {links.map((link) => (
               <NavLink
                 key={link.to}
                 to={link.to}
-                onClick={() => setIsOpen(false)}
+                onClick={closeNavigation}
                 className={({ isActive }) =>
                   `app-navigation-link${isActive ? " is-active" : ""}`
                 }
@@ -263,14 +294,16 @@ function SessionHeader({ user, onLogout }: SessionHeaderProps) {
               </NavLink>
             ))}
             {user.role === "PATIENT" && (
-              <details className="navigation-more">
-                <summary className="app-navigation-link">More</summary>
+              <details ref={moreNavigationRef} className="navigation-more">
+                <summary className="app-navigation-link">
+                  {t("navigation.more")}
+                </summary>
                 <div className="navigation-more-menu">
                   {patientMoreLinks.map((link) => (
                     <NavLink
                       key={link.to}
                       to={link.to}
-                      onClick={() => setIsOpen(false)}
+                      onClick={closeNavigation}
                       className={({ isActive }) =>
                         `app-navigation-link${isActive ? " is-active" : ""}`
                       }
@@ -293,12 +326,35 @@ function SessionHeader({ user, onLogout }: SessionHeaderProps) {
             </span>
           </div>
 
+          <div className="preference-toolbar" aria-label="Display preferences">
+            <label>
+              <span className="sr-only">{t("preferences.language")}</span>
+              <select
+                value={locale}
+                onChange={(event) =>
+                  setLocale(event.target.value === "ar" ? "ar" : "en")
+                }
+              >
+                <option value="en">{t("preferences.english")}</option>
+                <option value="ar">{t("preferences.arabic")}</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="button button-ghost button-small"
+              onClick={toggleTheme}
+              aria-pressed={theme === "dark"}
+            >
+              {theme === "dark" ? t("preferences.light") : t("preferences.dark")}
+            </button>
+          </div>
+
           <button
             type="button"
             className="button button-ghost button-small"
             onClick={onLogout}
           >
-            Log out
+            {t("navigation.logout")}
           </button>
         </div>
       </div>

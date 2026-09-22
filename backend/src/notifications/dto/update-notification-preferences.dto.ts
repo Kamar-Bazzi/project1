@@ -23,6 +23,10 @@ export class UpdateNotificationPreferencesDto {
 
   @IsOptional()
   @IsBoolean()
+  smsEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   medicationReminders?: boolean;
 
   @IsOptional()

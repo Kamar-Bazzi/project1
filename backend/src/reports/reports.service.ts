@@ -8,7 +8,11 @@ import {
   MedicationLogStatus,
 } from '@prisma/client';
 
-import { ClinicalAccessService } from '../common/clinical-access/clinical-access.service';
+import {
+  ClinicalAccessService,
+  ClinicalDataPermissions,
+  FULL_CLINICAL_DATA_PERMISSIONS,
+} from '../common/clinical-access/clinical-access.service';
 import { HealthAuditService } from '../common/health-audit/health-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -41,7 +45,13 @@ export class ReportsService {
 
   async getPatientReport(userId: string, periodDays: number) {
     const patient = await this.access.getPatientForUser(userId);
-    return this.buildReport(patient, userId, periodDays, true);
+    return this.buildReport(
+      patient,
+      userId,
+      periodDays,
+      true,
+      FULL_CLINICAL_DATA_PERMISSIONS,
+    );
   }
 
   async getDoctorPatientReport(
@@ -49,33 +59,42 @@ export class ReportsService {
     patientId: string,
     periodDays: number,
   ) {
-    const { patient } = await this.access.requireAssignedPatient(
+    const { patient, permissions } = await this.access.requireAssignedPatient(
       doctorUserId,
       patientId,
     );
-    return this.buildReport(patient, doctorUserId, periodDays, true);
+    return this.buildReport(
+      patient,
+      doctorUserId,
+      periodDays,
+      true,
+      permissions,
+    );
   }
 
   async getDoctorMonitoring(doctorUserId: string, periodDays: number) {
     const doctor = await this.access.getDoctorForUser(doctorUserId);
-    const patients = await this.prisma.patient.findMany({
-      where: {
-        doctorAccessGrants: {
-          some: { doctorId: doctor.id, active: true },
+    const assignments = await this.prisma.doctorPatientAccess.findMany({
+      where: { doctorId: doctor.id, active: true },
+      select: {
+        medicationsAllowed: true,
+        measurementsAllowed: true,
+        wearableDataAllowed: true,
+        documentsAllowed: true,
+        patient: {
+          select: {
+            id: true,
+            userId: true,
+            timeZone: true,
+            user: { select: { id: true, name: true, email: true } },
+          },
         },
       },
-      select: {
-        id: true,
-        userId: true,
-        timeZone: true,
-        user: { select: { id: true, name: true, email: true } },
-      },
-      orderBy: { user: { name: 'asc' } },
+      orderBy: { patient: { user: { name: 'asc' } } },
       take: 100,
     });
-
     const monitoredPatients: Array<{
-      patient: (typeof patients)[number];
+      patient: (typeof assignments)[number]['patient'];
       unusualChanges: UnusualChange[];
       unusualChangeCount: number;
       medicationAdherence: {
@@ -110,12 +129,19 @@ export class ReportsService {
         unusualChange: boolean;
       }>;
     }> = [];
-    for (const patient of patients) {
+    for (const assignment of assignments) {
+      const patient = assignment.patient;
       const report = await this.buildReport(
         patient,
         doctorUserId,
         periodDays,
         false,
+        {
+          medicationsAllowed: assignment.medicationsAllowed,
+          measurementsAllowed: assignment.measurementsAllowed,
+          wearableDataAllowed: assignment.wearableDataAllowed,
+          documentsAllowed: assignment.documentsAllowed,
+        },
       );
       monitoredPatients.push({
         patient,
@@ -173,6 +199,7 @@ export class ReportsService {
     actorUserId: string,
     periodDays: number,
     recordAudit: boolean,
+    permissions: ClinicalDataPermissions,
   ) {
     const to = new Date();
     const from = new Date(to.getTime() - periodDays * 86_400_000);
@@ -190,22 +217,41 @@ export class ReportsService {
       activeEmergency,
     ] = await Promise.all([
       this.prisma.measurement.findMany({
-        where: { patientId: patient.id, measuredAt: fullRange },
+        where: {
+          patientId: permissions.measurementsAllowed
+            ? patient.id
+            : '__excluded__',
+          measuredAt: fullRange,
+        },
         orderBy: { measuredAt: 'asc' },
       }),
       this.prisma.healthMetric.findMany({
-        where: { patientId: patient.id, measuredAt: fullRange },
+        where: {
+          patientId: permissions.wearableDataAllowed
+            ? patient.id
+            : '__excluded__',
+          measuredAt: fullRange,
+        },
         orderBy: { measuredAt: 'asc' },
       }),
       this.prisma.medicationLog.findMany({
         where: {
-          medication: { patientId: patient.id },
+          medication: {
+            patientId: permissions.medicationsAllowed
+              ? patient.id
+              : '__excluded__',
+          },
           scheduledFor: fullRange,
         },
         orderBy: { scheduledFor: 'asc' },
       }),
       this.prisma.healthAlert.findMany({
-        where: { patientId: patient.id, detectedAt: currentRange },
+        where: {
+          patientId: permissions.wearableDataAllowed
+            ? patient.id
+            : '__excluded__',
+          detectedAt: currentRange,
+        },
         orderBy: { detectedAt: 'desc' },
       }),
       this.prisma.appointment.findMany({

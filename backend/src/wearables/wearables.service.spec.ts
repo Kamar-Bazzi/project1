@@ -25,6 +25,8 @@ describe('WearablesService', () => {
   const wearableUpsert = jest.fn();
   const wearableUpdate = jest.fn();
   const providerGet = jest.fn();
+  const providerConnect = jest.fn();
+  const providerDisconnect = jest.fn();
   const auditRecord = jest.fn();
   const prisma = {
     patient: { findUnique: patientFindUnique },
@@ -46,7 +48,21 @@ describe('WearablesService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     patientFindUnique.mockResolvedValue({ id: 'patient-a' });
-    providerGet.mockReturnValue({ provider: WearableProvider.MOCK });
+    providerConnect.mockImplementation((input: { deviceName?: string }) =>
+      Promise.resolve({
+        provider: WearableProvider.MOCK,
+        deviceName: input.deviceName ?? 'Demo Watch',
+        externalDeviceId: 'demo-watch',
+      }),
+    );
+    providerDisconnect.mockResolvedValue({ success: true });
+    providerGet.mockReturnValue({
+      provider: WearableProvider.MOCK,
+      supportsConnection: true,
+      connect: providerConnect,
+      disconnect: providerDisconnect,
+      handleProviderError: (error: unknown) => error,
+    });
     auditRecord.mockResolvedValue(undefined);
   });
 
@@ -161,6 +177,11 @@ describe('WearablesService', () => {
         },
       }),
     );
+    expect(providerConnect).toHaveBeenCalledWith({
+      userId: 'user-a',
+      patientId: 'patient-a',
+      deviceName: undefined,
+    });
     expect(auditRecord).toHaveBeenCalledWith({
       userId: 'user-a',
       action: 'wearable.connect',
@@ -198,13 +219,31 @@ describe('WearablesService', () => {
   });
 
   it('rejects real providers until their native or OAuth integration exists', async () => {
-    providerGet.mockReturnValue(undefined);
+    providerGet.mockReturnValue({
+      provider: WearableProvider.FITBIT,
+      supportsConnection: false,
+      unavailableMessage: 'Fitbit requires OAuth configuration.',
+    });
 
     await expect(
       service.createForPatient('user-a', {
         provider: WearableProvider.FITBIT,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+    expect(patientFindUnique).not.toHaveBeenCalled();
+    expect(wearableUpsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects providers that have no registered adapter', async () => {
+    providerGet.mockReturnValue(undefined);
+
+    await expect(
+      service.createForPatient('user-a', {
+        provider: WearableProvider.OTHER,
+      }),
+    ).rejects.toEqual(
+      new BadRequestException('Unsupported wearable provider.'),
+    );
     expect(patientFindUnique).not.toHaveBeenCalled();
     expect(wearableUpsert).not.toHaveBeenCalled();
   });
@@ -216,6 +255,10 @@ describe('WearablesService', () => {
     await expect(
       service.disconnectForPatient('user-a', device.id),
     ).resolves.toBeUndefined();
+    expect(providerDisconnect).toHaveBeenCalledWith(device, {
+      userId: 'user-a',
+      patientId: 'patient-a',
+    });
     expect(wearableUpdate).toHaveBeenCalledWith({
       where: { id: device.id, patientId: 'patient-a' },
       data: { active: false },

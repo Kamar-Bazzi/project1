@@ -40,11 +40,28 @@ values. Every generated record has source `MOCK`, metadata `demo: true`, and
 the disclaimer **“Generated demo data; not a real medical reading.”** These
 values are for development and testing only.
 
+Known provider adapters are registered with explicit integration requirements:
+
+| Provider | Current backend status | Integration requirement |
+| --- | --- | --- |
+| `MOCK` | Connectable demo provider | No credentials; local deterministic data only |
+| `FITBIT` | Placeholder adapter, not connectable | OAuth application, scopes, callback validation, refresh-token storage |
+| `GARMIN` | Placeholder adapter, not connectable | Approved provider API/OAuth access and secure token lifecycle |
+| `HEALTH_CONNECT` | Placeholder adapter, not connectable | Android companion app and Health Connect permissions |
+| `HEALTHKIT` | Placeholder adapter, not connectable | iOS companion app, HealthKit entitlement, and user permission |
+| `SAMSUNG` / `OTHER` | Unsupported until a provider-specific adapter exists | Official SDK or provider API design required |
+
 ## Provider-neutral design
 
-`WearableProviderAdapter` converts a provider-specific record to the common
-measurement shape:
+`WearableProviderAdapter` defines the provider lifecycle and converts a
+provider-specific record to the common measurement shape:
 
+- connect
+- disconnect
+- sync
+- refresh authentication when the provider supports server-side credentials
+- normalize raw provider records
+- convert provider failures into typed, retry-aware errors
 - metric type and numeric value
 - canonical unit
 - source timestamp

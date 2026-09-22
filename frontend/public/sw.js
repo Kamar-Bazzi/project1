@@ -26,11 +26,22 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const requestedPath = event.notification.data?.path;
-  const path =
-    typeof requestedPath === "string" && requestedPath.startsWith("/")
-      ? requestedPath
-      : "/dashboard";
-  const destination = new URL(path, self.location.origin).href;
+  let destination = new URL("/dashboard", self.location.origin).href;
+
+  if (
+    typeof requestedPath === "string" &&
+    requestedPath.startsWith("/") &&
+    !requestedPath.startsWith("//")
+  ) {
+    try {
+      const requestedDestination = new URL(requestedPath, self.location.origin);
+      if (requestedDestination.origin === self.location.origin) {
+        destination = requestedDestination.href;
+      }
+    } catch {
+      // Keep the safe dashboard fallback for malformed notification data.
+    }
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {

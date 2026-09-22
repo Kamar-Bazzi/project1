@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { withoutPatientId } from '../common/responses/without-patient-id';
 import { CreateEmergencyContactDto } from './dto/create-emergency-contact.dto';
+import { EmergencyContactNotificationQueryDto } from './dto/emergency-contact-notification-query.dto';
 import { UpdateEmergencyContactDto } from './dto/update-emergency-contact.dto';
 import { EmergencyContactsService } from './emergency-contacts.service';
 
@@ -45,6 +47,17 @@ export class EmergencyContactsController {
     );
 
     return contacts.map(withoutPatientId);
+  }
+
+  @Get('notification-history')
+  findNotificationHistory(
+    @Req() request: AuthenticatedPatientRequest,
+    @Query() query: EmergencyContactNotificationQueryDto,
+  ) {
+    return this.emergencyContactsService.findNotificationHistoryForPatient(
+      request.user.id,
+      query,
+    );
   }
 
   @Get(':id')

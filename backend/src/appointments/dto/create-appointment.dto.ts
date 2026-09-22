@@ -1,14 +1,16 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsDateString,
+  IsInt,
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateIf,
 } from 'class-validator';
-
 import { ISO_TIME_ZONE_SUFFIX_PATTERN } from './appointment-date-validation';
 
 function trimNullableString(value: unknown): unknown {
@@ -40,6 +42,13 @@ export class CreateAppointmentDto {
     typeof value === 'string' ? value.trim() : value,
   )
   appointmentDate: string;
+
+  @ValidateIf((_object, value: unknown) => value !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(5)
+  @Max(480)
+  durationMinutes?: number;
 
   @ValidateIf(
     (_object, value: unknown) => value !== undefined && value !== null,

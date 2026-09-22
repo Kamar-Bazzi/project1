@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "../../components/auth/auth-context";
+import TwoFactorPanel from "../../components/auth/TwoFactorPanel";
 import { getApiErrorMessage } from "../../services/api-error";
 import {
   authService,
@@ -244,9 +245,11 @@ export default function SecurityPage() {
       </section>
 
       <section className="card data-section security-events-section" aria-labelledby="security-events-title">
-        <div className="section-heading"><p className="eyebrow">Sign-in activity</p><h2 id="security-events-title">Security events</h2><p>Review authentication activity and immediately revoke sessions you do not recognize.</p></div>
+        <div className="section-heading"><p className="eyebrow">Account history</p><h2 id="security-events-title">Account activity</h2><p>Review logins, failed attempts, password and two-factor changes, and session security actions.</p></div>
         {securityEvents.length === 0 ? <div className="inline-state"><span className="state-icon" aria-hidden="true">✓</span><h3>No recent security events</h3><p>New sign-ins and security-sensitive account activity will appear here.</p></div> : <div className="security-event-list">{securityEvents.map((event) => { const suspicious = event.metadata?.suspicious === true; return <article key={event.id} className={`security-event-item${suspicious ? " is-suspicious" : ""}`}><span className="security-event-icon" aria-hidden="true">{suspicious ? "!" : "✓"}</span><div><div className="badge-row"><h3>{event.action.replace(/_/g, " ").toLowerCase().replace(/^./, (character) => character.toUpperCase())}</h3>{suspicious && <span className="badge badge-cancelled">Suspicious</span>}</div><p>{describeDevice(event.userAgent)} · {event.ipAddress || "IP unavailable"}</p>{event.metadata?.reason && <strong>{event.metadata.reason}</strong>}<time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time></div></article>; })}</div>}
       </section>
+
+      <TwoFactorPanel />
 
       <section className="card form-card password-change-card" aria-labelledby="change-password-title">
         <div className="section-heading"><p className="eyebrow">Credentials</p><h2 id="change-password-title">Change password</h2><p>Changing your password closes every active session, including this device.</p></div>

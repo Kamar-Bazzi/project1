@@ -9,6 +9,10 @@ import {
   Prisma,
 } from '@prisma/client';
 
+import {
+  ClinicalAccessService,
+  ClinicalDataCategory,
+} from '../common/clinical-access/clinical-access.service';
 import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { DoctorAlertQueryDto } from './dto/doctor-alert-query.dto';
@@ -16,19 +20,37 @@ import { DoctorPatientQueryDto } from './dto/doctor-patient-query.dto';
 
 @Injectable()
 export class DoctorService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: ClinicalAccessService,
+  ) {}
 
   async getDashboard(userId: string) {
     const doctor = await this.getDoctor(userId);
     const doctorId = doctor.id;
     const now = new Date();
     const assignedPatient = this.assignedPatientFilter(doctorId);
-    const assignedClinicalRecord = { patient: assignedPatient };
+    const medicationPatient = this.assignedPatientFilter(
+      doctorId,
+      'MEDICATIONS',
+    );
+    const measurementPatient = this.assignedPatientFilter(
+      doctorId,
+      'MEASUREMENTS',
+    );
+    const wearablePatient = this.assignedPatientFilter(
+      doctorId,
+      'WEARABLE_DATA',
+    );
+    const assignedMedicationRecord = { patient: medicationPatient };
+    const assignedMeasurementRecord = { patient: measurementPatient };
+    const assignedWearableRecord = { patient: wearablePatient };
     const missedSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const patientNeedsAttention: Prisma.PatientWhereInput = {
       ...assignedPatient,
       OR: [
         {
+          ...wearablePatient,
           healthAlerts: {
             some: {
               status: HealthAlertStatus.ACTIVE,
@@ -39,6 +61,7 @@ export class DoctorService {
           },
         },
         {
+          ...medicationPatient,
           medications: {
             some: {
               logs: {
@@ -74,13 +97,13 @@ export class DoctorService {
       this.prisma.patient.count({ where: assignedPatient }),
       this.prisma.healthAlert.count({
         where: {
-          ...assignedClinicalRecord,
+          ...assignedWearableRecord,
           status: HealthAlertStatus.ACTIVE,
         },
       }),
       this.prisma.medication.count({
         where: {
-          ...assignedClinicalRecord,
+          ...assignedMedicationRecord,
           status: MedicationStatus.ACTIVE,
         },
       }),
@@ -96,7 +119,7 @@ export class DoctorService {
         where: {
           status: MedicationLogStatus.MISSED,
           scheduledFor: { gte: missedSince },
-          medication: assignedClinicalRecord,
+          medication: assignedMedicationRecord,
         },
       }),
       this.prisma.patient.count({ where: patientNeedsAttention }),
@@ -110,9 +133,21 @@ export class DoctorService {
           user: { select: { id: true, name: true, email: true } },
           _count: {
             select: {
-              medications: { where: { status: MedicationStatus.ACTIVE } },
-              measurements: true,
-              healthAlerts: { where: { status: HealthAlertStatus.ACTIVE } },
+              medications: {
+                where: {
+                  status: MedicationStatus.ACTIVE,
+                  patient: medicationPatient,
+                },
+              },
+              measurements: {
+                where: { patient: measurementPatient },
+              },
+              healthAlerts: {
+                where: {
+                  status: HealthAlertStatus.ACTIVE,
+                  patient: wearablePatient,
+                },
+              },
               appointments: {
                 where: {
                   doctorId,
@@ -128,7 +163,7 @@ export class DoctorService {
       }),
       this.prisma.healthAlert.findMany({
         where: {
-          ...assignedClinicalRecord,
+          ...assignedWearableRecord,
           status: HealthAlertStatus.ACTIVE,
         },
         include: {
@@ -144,7 +179,7 @@ export class DoctorService {
       }),
       this.prisma.medication.findMany({
         where: {
-          ...assignedClinicalRecord,
+          ...assignedMedicationRecord,
           status: MedicationStatus.ACTIVE,
         },
         include: {
@@ -164,7 +199,7 @@ export class DoctorService {
         take: 10,
       }),
       this.prisma.measurement.findMany({
-        where: assignedClinicalRecord,
+        where: assignedMeasurementRecord,
         include: {
           patient: {
             select: {
@@ -200,7 +235,7 @@ export class DoctorService {
         where: {
           status: MedicationLogStatus.MISSED,
           scheduledFor: { gte: missedSince },
-          medication: assignedClinicalRecord,
+          medication: assignedMedicationRecord,
         },
         include: {
           medication: {
@@ -223,7 +258,10 @@ export class DoctorService {
           id: true,
           user: { select: { id: true, name: true, email: true } },
           healthAlerts: {
-            where: { status: HealthAlertStatus.ACTIVE },
+            where: {
+              status: HealthAlertStatus.ACTIVE,
+              patient: wearablePatient,
+            },
             select: {
               id: true,
               severity: true,
@@ -240,6 +278,7 @@ export class DoctorService {
           },
           medications: {
             where: {
+              patient: medicationPatient,
               logs: {
                 some: {
                   status: MedicationLogStatus.MISSED,
@@ -290,6 +329,18 @@ export class DoctorService {
 
   async findPatients(userId: string, query: DoctorPatientQueryDto) {
     const doctor = await this.getDoctor(userId);
+    const medicationPatient = this.assignedPatientFilter(
+      doctor.id,
+      'MEDICATIONS',
+    );
+    const measurementPatient = this.assignedPatientFilter(
+      doctor.id,
+      'MEASUREMENTS',
+    );
+    const wearablePatient = this.assignedPatientFilter(
+      doctor.id,
+      'WEARABLE_DATA',
+    );
     const where: Prisma.PatientWhereInput = {
       ...this.assignedPatientFilter(doctor.id),
       user: query.search
@@ -314,11 +365,15 @@ export class DoctorService {
           createdAt: true,
           user: { select: { id: true, name: true, email: true } },
           measurements: {
+            where: { patient: measurementPatient },
             orderBy: [{ measuredAt: 'desc' }, { createdAt: 'desc' }],
             take: 1,
           },
           healthAlerts: {
-            where: { status: HealthAlertStatus.ACTIVE },
+            where: {
+              status: HealthAlertStatus.ACTIVE,
+              patient: wearablePatient,
+            },
             orderBy: { detectedAt: 'desc' },
             take: 1,
           },
@@ -333,9 +388,19 @@ export class DoctorService {
           },
           _count: {
             select: {
-              medications: { where: { status: MedicationStatus.ACTIVE } },
-              measurements: true,
-              healthAlerts: { where: { status: HealthAlertStatus.ACTIVE } },
+              medications: {
+                where: {
+                  status: MedicationStatus.ACTIVE,
+                  patient: medicationPatient,
+                },
+              },
+              measurements: { where: { patient: measurementPatient } },
+              healthAlerts: {
+                where: {
+                  status: HealthAlertStatus.ACTIVE,
+                  patient: wearablePatient,
+                },
+              },
               appointments: {
                 where: {
                   doctorId: doctor.id,
@@ -360,7 +425,10 @@ export class DoctorService {
   }
 
   async findPatient(userId: string, patientId: string) {
-    const doctor = await this.getDoctor(userId);
+    const { doctor, permissions } = await this.access.requireAssignedPatient(
+      userId,
+      patientId,
+    );
     const patient = await this.prisma.patient.findFirst({
       where: {
         id: patientId,
@@ -378,6 +446,9 @@ export class DoctorService {
         updatedAt: true,
         user: { select: { id: true, name: true, email: true } },
         medications: {
+          where: {
+            patient: this.assignedPatientFilter(doctor.id, 'MEDICATIONS'),
+          },
           include: {
             schedules: { orderBy: { scheduledTime: 'asc' } },
             logs: { orderBy: { scheduledFor: 'desc' }, take: 30 },
@@ -386,14 +457,23 @@ export class DoctorService {
           take: 100,
         },
         measurements: {
+          where: {
+            patient: this.assignedPatientFilter(doctor.id, 'MEASUREMENTS'),
+          },
           orderBy: [{ measuredAt: 'desc' }, { createdAt: 'desc' }],
           take: 100,
         },
         healthAlerts: {
+          where: {
+            patient: this.assignedPatientFilter(doctor.id, 'WEARABLE_DATA'),
+          },
           orderBy: [{ detectedAt: 'desc' }, { createdAt: 'desc' }],
           take: 100,
         },
         healthMetrics: {
+          where: {
+            patient: this.assignedPatientFilter(doctor.id, 'WEARABLE_DATA'),
+          },
           orderBy: [{ measuredAt: 'desc' }, { createdAt: 'desc' }],
           take: 100,
         },
@@ -419,7 +499,7 @@ export class DoctorService {
       },
     });
 
-    return patient;
+    return { ...patient, dataSharingPermissions: permissions };
   }
 
   async findAlerts(userId: string, query: DoctorAlertQueryDto) {
@@ -429,7 +509,7 @@ export class DoctorService {
       status: query.status,
       severity: query.severity,
       metricType: query.metricType,
-      patient: this.assignedPatientFilter(doctor.id),
+      patient: this.assignedPatientFilter(doctor.id, 'WEARABLE_DATA'),
     };
     const skip = (query.page - 1) * query.pageSize;
     const [items, total] = await this.prisma.$transaction([
@@ -495,10 +575,23 @@ export class DoctorService {
     return doctor;
   }
 
-  private assignedPatientFilter(doctorId: string): Prisma.PatientWhereInput {
+  private assignedPatientFilter(
+    doctorId: string,
+    category?: ClinicalDataCategory,
+  ): Prisma.PatientWhereInput {
+    const permissionFilter =
+      category === 'MEDICATIONS'
+        ? { medicationsAllowed: true }
+        : category === 'MEASUREMENTS'
+          ? { measurementsAllowed: true }
+          : category === 'WEARABLE_DATA'
+            ? { wearableDataAllowed: true }
+            : category === 'DOCUMENTS'
+              ? { documentsAllowed: true }
+              : {};
     return {
       doctorAccessGrants: {
-        some: { doctorId, active: true },
+        some: { doctorId, active: true, ...permissionFilter },
       },
     };
   }

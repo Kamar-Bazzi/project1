@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateWearableDto } from './dto/create-wearable.dto';
 import { UpdateWearableDto } from './dto/update-wearable.dto';
+import { WearableSyncHistoryQueryDto } from './dto/wearable-sync-history-query.dto';
 import { WearablesService } from './wearables.service';
 
 interface AuthenticatedPatientRequest extends Request {
@@ -46,6 +48,17 @@ export class WearablesController {
   @Get()
   findAll(@Req() request: AuthenticatedPatientRequest) {
     return this.wearablesService.findAllForPatient(request.user.id);
+  }
+
+  @Get('sync-history')
+  findSyncHistory(
+    @Req() request: AuthenticatedPatientRequest,
+    @Query() query: WearableSyncHistoryQueryDto,
+  ) {
+    return this.wearablesService.findSyncHistoryForPatient(
+      request.user.id,
+      query,
+    );
   }
 
   @Get(':id')

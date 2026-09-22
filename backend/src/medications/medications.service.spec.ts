@@ -9,6 +9,7 @@ describe('MedicationsService', () => {
   const patientFindUnique = jest.fn();
   const patientUpdateMany = jest.fn();
   const medicationFindMany = jest.fn();
+  const medicationCount = jest.fn();
   const medicationFindFirst = jest.fn();
   const medicationCreate = jest.fn();
   const medicationUpdate = jest.fn();
@@ -29,6 +30,7 @@ describe('MedicationsService', () => {
     },
     medication: {
       findMany: medicationFindMany,
+      count: medicationCount,
       findFirst: medicationFindFirst,
       create: medicationCreate,
       update: medicationUpdate,
@@ -95,6 +97,7 @@ describe('MedicationsService', () => {
     scheduleDeleteMany.mockResolvedValue({ count: 1 });
     scheduleUpsert.mockResolvedValue({});
     logDeleteMany.mockResolvedValue({ count: 1 });
+    medicationCount.mockResolvedValue(0);
 
     service = new MedicationsService(prisma as unknown as PrismaService);
   });
@@ -125,6 +128,8 @@ describe('MedicationsService', () => {
     await expect(service.create('user-1', createDto)).resolves.toEqual({
       ...response,
       timeZone: 'UTC',
+      refillStatus: 'NOT_TRACKED',
+      lowSupplyWarning: null,
     });
 
     expect(patientFindUnique).toHaveBeenCalledWith({
@@ -222,7 +227,12 @@ describe('MedicationsService', () => {
       .mockResolvedValueOnce([{ id: 'active' }]);
 
     await expect(service.findAll('user-1')).resolves.toEqual([
-      { id: 'active', timeZone: 'UTC' },
+      {
+        id: 'active',
+        timeZone: 'UTC',
+        refillStatus: 'NOT_TRACKED',
+        lowSupplyWarning: null,
+      },
     ]);
 
     expect(logCreateMany).toHaveBeenCalledTimes(1);

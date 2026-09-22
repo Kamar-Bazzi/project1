@@ -31,23 +31,49 @@ services:
     networks:
       - backend
 
+  clamav:
+    image: clamav/clamav:1.4_base
+    restart: unless-stopped
+    expose:
+      - "3310"
+    volumes:
+      - clamav-signatures:/var/lib/clamav
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "echo PING | nc -w 5 127.0.0.1 3310 | grep -qx PONG",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 6m
+    networks:
+      - backend
+      - clamav-egress
+
   api:
     build:
       context: ./backend
       target: runtime
     restart: unless-stopped
     env_file:
-      - ${PRODUCTION_ENV_FILE:-.env.production}
+      - path: ${PRODUCTION_ENV_FILE:-.env.production}
+        required: false
     environment:
       NODE_ENV: production
     depends_on:
       database:
+        condition: service_healthy
+      clamav:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     command: ["sh", "-c", "npm run verify:production && exec node dist/main.js"]
     expose:
       - "3000"
+    volumes:
+      - document-data:/var/lib/caretrack/documents
     healthcheck:
       test:
         [
@@ -113,8 +139,11 @@ services:
 volumes:
   database-data:
   database-backups:
+  document-data:
+  clamav-signatures:
 
 networks:
   frontend:
   backend:
     internal: true
+  clamav-egress:

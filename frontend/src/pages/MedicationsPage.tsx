@@ -1,9 +1,12 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
+import MedicationInteractionPanel from "../components/medications/MedicationInteractionPanel";
+import MedicationRefillPanel from "../components/medications/MedicationRefillPanel";
 import { useMedications } from "../services/use-medications";
 import {
   formatMedicationDoseTime,
   formatEnumLabel,
   getTodaysMedicationLogs,
+  isMedicationLowSupply,
   medicationLogStatuses,
   medicationStatuses,
   type Medication,
@@ -14,6 +17,7 @@ import {
 
 type MedicationStatusFilter = "ALL" | MedicationStatus;
 type MedicationLogStatusFilter = "ALL" | MedicationLogStatus;
+const MEDICATION_PAGE_SIZE = 10;
 
 interface MedicationDraft {
   name: string;
@@ -67,8 +71,15 @@ function formatDate(value: string | null): string {
 }
 
 export default function MedicationsPage() {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] =
+    useState<MedicationStatusFilter>("ALL");
+  const [doseStatusFilter, setDoseStatusFilter] =
+    useState<MedicationLogStatusFilter>("ALL");
+  const [page, setPage] = useState(1);
   const {
     medications,
+    pagination,
     isLoading,
     error,
     actionError,
@@ -79,12 +90,14 @@ export default function MedicationsPage() {
     updateMedication,
     deleteMedication,
     updateMedicationLogStatus,
-  } = useMedications();
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] =
-    useState<MedicationStatusFilter>("ALL");
-  const [doseStatusFilter, setDoseStatusFilter] =
-    useState<MedicationLogStatusFilter>("ALL");
+    updateMedicationRefill,
+  } = useMedications({
+    page,
+    pageSize: MEDICATION_PAGE_SIZE,
+    search: searchTerm.trim() || undefined,
+    status: statusFilter === "ALL" ? undefined : statusFilter,
+    doseStatus: doseStatusFilter === "ALL" ? undefined : doseStatusFilter,
+  });
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<MedicationDraft>(createEmptyDraft);
@@ -92,7 +105,17 @@ export default function MedicationsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const todaysLogs = useMemo(
-    () => medications.flatMap((medication) => getTodaysMedicationLogs(medication)),
+    () =>
+      medications.flatMap((medication) => getTodaysMedicationLogs(medication)),
+    [medications],
+  );
+  const medicationInteractionRevision = useMemo(
+    () =>
+      medications
+        .filter((medication) => medication.status === "ACTIVE")
+        .map((medication) => `${medication.id}:${medication.name}`)
+        .sort()
+        .join("|"),
     [medications],
   );
   const activeMedications = medications.filter(
@@ -102,25 +125,20 @@ export default function MedicationsPage() {
   const attentionToday = todaysLogs.filter(
     (log) => log.status === "MISSED" || log.status === "SKIPPED",
   ).length;
+  const lowSupplyCount = medications.filter(isMedicationLowSupply).length;
+  const totalPages = Math.max(1, pagination.totalPages);
+  const hasFilters =
+    Boolean(searchTerm.trim()) ||
+    statusFilter !== "ALL" ||
+    doseStatusFilter !== "ALL";
 
-  const filteredMedications = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
+  useEffect(() => {
+    setPage(1);
+  }, [doseStatusFilter, searchTerm, statusFilter]);
 
-    return medications.filter((medication) => {
-      const medicationLogs = getTodaysMedicationLogs(medication);
-      const matchesSearch =
-        !normalizedSearch ||
-        medication.name.toLowerCase().includes(normalizedSearch) ||
-        medication.dosage.toLowerCase().includes(normalizedSearch);
-      const matchesStatus =
-        statusFilter === "ALL" || medication.status === statusFilter;
-      const matchesDoseStatus =
-        doseStatusFilter === "ALL" ||
-        medicationLogs.some((log) => log.status === doseStatusFilter);
-
-      return matchesSearch && matchesStatus && matchesDoseStatus;
-    });
-  }, [doseStatusFilter, medications, searchTerm, statusFilter]);
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   function openCreateForm(): void {
     setEditingId(null);
@@ -160,7 +178,9 @@ export default function MedicationsPage() {
     }));
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
     event.preventDefault();
     setFormError(null);
     setSuccessMessage(null);
@@ -184,7 +204,10 @@ export default function MedicationsPage() {
       return;
     }
 
-    if (new Set(draft.schedules.map((schedule) => schedule.scheduledTime)).size !== draft.schedules.length) {
+    if (
+      new Set(draft.schedules.map((schedule) => schedule.scheduledTime))
+        .size !== draft.schedules.length
+    ) {
       setFormError("Each medication schedule must use a unique time.");
       return;
     }
@@ -232,13 +255,20 @@ export default function MedicationsPage() {
           <h1>Medications</h1>
           <p>Manage prescriptions and record every scheduled dose.</p>
         </div>
-        <button className="button button-primary" type="button" onClick={openCreateForm}>
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={openCreateForm}
+        >
           <span aria-hidden="true">＋</span> Add medication
         </button>
       </header>
 
       {isFormOpen && (
-        <section className="card form-card page-form" aria-labelledby="medication-form-title">
+        <section
+          className="card form-card page-form"
+          aria-labelledby="medication-form-title"
+        >
           <div className="section-heading section-heading-actions">
             <div>
               <h2 id="medication-form-title">
@@ -246,11 +276,26 @@ export default function MedicationsPage() {
               </h2>
               <p>Enter the prescription details and daily schedule.</p>
             </div>
-            <button className="icon-button" type="button" onClick={closeForm} aria-label="Close form">×</button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={closeForm}
+              aria-label="Close form"
+            >
+              ×
+            </button>
           </div>
 
-          {formError && <div className="alert alert-error" role="alert">{formError}</div>}
-          {actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
+          {formError && (
+            <div className="alert alert-error" role="alert">
+              {formError}
+            </div>
+          )}
+          {actionError && (
+            <div className="alert alert-error" role="alert">
+              {actionError}
+            </div>
+          )}
 
           <form className="form-stack" onSubmit={handleSubmit} noValidate>
             <div className="form-grid">
@@ -259,7 +304,10 @@ export default function MedicationsPage() {
                 <input
                   value={draft.name}
                   onChange={(event) =>
-                    setDraft((current) => ({ ...current, name: event.target.value }))
+                    setDraft((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
                   }
                   disabled={mutationKey !== null}
                   maxLength={100}
@@ -272,7 +320,10 @@ export default function MedicationsPage() {
                 <input
                   value={draft.dosage}
                   onChange={(event) =>
-                    setDraft((current) => ({ ...current, dosage: event.target.value }))
+                    setDraft((current) => ({
+                      ...current,
+                      dosage: event.target.value,
+                    }))
                   }
                   disabled={mutationKey !== null}
                   maxLength={100}
@@ -286,7 +337,10 @@ export default function MedicationsPage() {
                   type="date"
                   value={draft.startDate}
                   onChange={(event) =>
-                    setDraft((current) => ({ ...current, startDate: event.target.value }))
+                    setDraft((current) => ({
+                      ...current,
+                      startDate: event.target.value,
+                    }))
                   }
                   disabled={mutationKey !== null}
                   required
@@ -299,7 +353,10 @@ export default function MedicationsPage() {
                   min={draft.startDate}
                   value={draft.endDate}
                   onChange={(event) =>
-                    setDraft((current) => ({ ...current, endDate: event.target.value }))
+                    setDraft((current) => ({
+                      ...current,
+                      endDate: event.target.value,
+                    }))
                   }
                   disabled={mutationKey !== null}
                 />
@@ -326,7 +383,9 @@ export default function MedicationsPage() {
               <div className="fieldset-heading">
                 <div>
                   <legend>Daily dose times</legend>
-                  <p>Add up to eight unique times. Each schedule repeats daily.</p>
+                  <p>
+                    Add up to eight unique times. Each schedule repeats daily.
+                  </p>
                 </div>
                 <button
                   className="button button-secondary button-small"
@@ -348,7 +407,10 @@ export default function MedicationsPage() {
 
               <div className="schedule-list">
                 {draft.schedules.map((schedule, index) => (
-                  <div className="schedule-row" key={`${index}-${draft.schedules.length}`}>
+                  <div
+                    className="schedule-row"
+                    key={`${index}-${draft.schedules.length}`}
+                  >
                     <label className="field">
                       <span>Time {index + 1}</span>
                       <input
@@ -365,7 +427,9 @@ export default function MedicationsPage() {
                       className="icon-button icon-button-danger schedule-remove"
                       type="button"
                       aria-label={`Remove schedule ${index + 1}`}
-                      disabled={mutationKey !== null || draft.schedules.length === 1}
+                      disabled={
+                        mutationKey !== null || draft.schedules.length === 1
+                      }
                       onClick={() =>
                         setDraft((current) => ({
                           ...current,
@@ -383,10 +447,23 @@ export default function MedicationsPage() {
             </fieldset>
 
             <div className="form-actions">
-              <button className="button button-primary" type="submit" disabled={mutationKey !== null}>
-                {mutationKey ? "Saving…" : editingId ? "Save changes" : "Add medication"}
+              <button
+                className="button button-primary"
+                type="submit"
+                disabled={mutationKey !== null}
+              >
+                {mutationKey
+                  ? "Saving…"
+                  : editingId
+                    ? "Save changes"
+                    : "Add medication"}
               </button>
-              <button className="button button-secondary" type="button" disabled={mutationKey !== null} onClick={closeForm}>
+              <button
+                className="button button-secondary"
+                type="button"
+                disabled={mutationKey !== null}
+                onClick={closeForm}
+              >
                 Cancel
               </button>
             </div>
@@ -394,27 +471,73 @@ export default function MedicationsPage() {
         </section>
       )}
 
-      {successMessage && <div className="alert alert-success" role="status">{successMessage}</div>}
-      {!isFormOpen && actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
+      {successMessage && (
+        <div className="alert alert-success" role="status">
+          {successMessage}
+        </div>
+      )}
+      {!isFormOpen && actionError && (
+        <div className="alert alert-error" role="alert">
+          {actionError}
+        </div>
+      )}
 
-      <section className="summary-grid" aria-label="Medication summary">
+      <section
+        className="summary-grid medication-summary-grid"
+        aria-label="Medication summary"
+      >
         <article className="summary-card">
-          <span className="summary-icon summary-icon-blue" aria-hidden="true">Rx</span>
-          <div><p>Total medications</p><strong>{medications.length}</strong></div>
+          <span className="summary-icon summary-icon-blue" aria-hidden="true">
+            Rx
+          </span>
+          <div>
+            <p>Matching medications</p>
+            <strong>{pagination.total}</strong>
+          </div>
         </article>
         <article className="summary-card">
-          <span className="summary-icon summary-icon-teal" aria-hidden="true">✓</span>
-          <div><p>Active</p><strong>{activeMedications}</strong></div>
+          <span className="summary-icon summary-icon-teal" aria-hidden="true">
+            ✓
+          </span>
+          <div>
+            <p>Active on page</p>
+            <strong>{activeMedications}</strong>
+          </div>
         </article>
         <article className="summary-card">
-          <span className="summary-icon summary-icon-violet" aria-hidden="true">●</span>
-          <div><p>Taken today</p><strong>{takenToday}</strong></div>
+          <span className="summary-icon summary-icon-violet" aria-hidden="true">
+            ●
+          </span>
+          <div>
+            <p>Taken today on page</p>
+            <strong>{takenToday}</strong>
+          </div>
         </article>
         <article className="summary-card">
-          <span className="summary-icon summary-icon-amber" aria-hidden="true">!</span>
-          <div><p>Missed or skipped</p><strong>{attentionToday}</strong></div>
+          <span className="summary-icon summary-icon-amber" aria-hidden="true">
+            !
+          </span>
+          <div>
+            <p>Needs attention on page</p>
+            <strong>{attentionToday}</strong>
+          </div>
+        </article>
+        <article className="summary-card">
+          <span className="summary-icon summary-icon-amber" aria-hidden="true">
+            ↓
+          </span>
+          <div>
+            <p>Low supply on page</p>
+            <strong>{lowSupplyCount}</strong>
+          </div>
         </article>
       </section>
+
+      {!isLoading && !error && (
+        <MedicationInteractionPanel
+          medicationRevision={medicationInteractionRevision}
+        />
+      )}
 
       <section className="card filter-bar" aria-label="Medication filters">
         <label className="search-field">
@@ -437,24 +560,43 @@ export default function MedicationsPage() {
           >
             <option value="ALL">All lifecycle statuses</option>
             {medicationStatuses.map((status) => (
-              <option key={status} value={status}>{formatEnumLabel(status)}</option>
+              <option key={status} value={status}>
+                {formatEnumLabel(status)}
+              </option>
             ))}
           </select>
         </label>
         <label className="compact-field">
-          <span className="sr-only">Filter today&apos;s dose status</span>
+          <span className="sr-only">Filter today's dose status</span>
           <select
             value={doseStatusFilter}
             onChange={(event) =>
-              setDoseStatusFilter(event.target.value as MedicationLogStatusFilter)
+              setDoseStatusFilter(
+                event.target.value as MedicationLogStatusFilter,
+              )
             }
           >
             <option value="ALL">All dose statuses</option>
             {medicationLogStatuses.map((status) => (
-              <option key={status} value={status}>{formatEnumLabel(status)}</option>
+              <option key={status} value={status}>
+                {formatEnumLabel(status)}
+              </option>
             ))}
           </select>
         </label>
+        {hasFilters && (
+          <button
+            className="button button-ghost button-small"
+            type="button"
+            onClick={() => {
+              setSearchTerm("");
+              setStatusFilter("ALL");
+              setDoseStatusFilter("ALL");
+            }}
+          >
+            Clear filters
+          </button>
+        )}
       </section>
 
       {isLoading ? (
@@ -465,23 +607,30 @@ export default function MedicationsPage() {
         </section>
       ) : error ? (
         <section className="state-card" role="alert">
-          <span className="state-icon" aria-hidden="true">!</span>
+          <span className="state-icon" aria-hidden="true">
+            !
+          </span>
           <h2>Medications unavailable</h2>
           <p>{error}</p>
-          <button className="button button-primary" onClick={() => void refresh()}>
+          <button
+            className="button button-primary"
+            onClick={() => void refresh()}
+          >
             Try again
           </button>
         </section>
-      ) : medications.length === 0 ? (
+      ) : medications.length === 0 && !hasFilters && page === 1 ? (
         <section className="state-card empty-state">
-          <span className="state-icon" aria-hidden="true">Rx</span>
+          <span className="state-icon" aria-hidden="true">
+            Rx
+          </span>
           <h2>No medications yet</h2>
           <p>Add your first prescription to start tracking scheduled doses.</p>
           <button className="button button-primary" onClick={openCreateForm}>
             Add first medication
           </button>
         </section>
-      ) : filteredMedications.length === 0 ? (
+      ) : medications.length === 0 ? (
         <section className="state-card empty-state">
           <h2>No matching medications</h2>
           <p>Adjust the search or filters to see more results.</p>
@@ -497,138 +646,206 @@ export default function MedicationsPage() {
           </button>
         </section>
       ) : (
-        <section className="medication-list" aria-label="Medication list">
-          {filteredMedications.map((medication) => {
-            const medicationLogs = getTodaysMedicationLogs(medication);
-            const isMedicationBusy = mutationKey === `medication:${medication.id}`;
+        <>
+          <section className="medication-list" aria-label="Medication list">
+            {medications.map((medication) => {
+              const medicationLogs = getTodaysMedicationLogs(medication);
+              const isMedicationBusy =
+                mutationKey === `medication:${medication.id}`;
 
-            return (
-              <article className="card medication-record" key={medication.id}>
-                <div className="medication-record-main">
-                  <div className="medication-title-row">
-                    <div>
-                      <div className="badge-row">
-                        <span className={`badge badge-${medication.status.toLowerCase()}`}>
-                          {formatEnumLabel(medication.status)}
-                        </span>
-                      </div>
-                      <h2>{medication.name}</h2>
-                      <p className="medication-dose">{medication.dosage}</p>
-                    </div>
-                    <div className="row-actions">
-                      <button className="button button-ghost button-small" type="button" disabled={mutationKey !== null} onClick={() => openEditForm(medication)}>
-                        Edit
-                      </button>
-                      <button className="button button-danger-ghost button-small" type="button" disabled={mutationKey !== null} onClick={() => void handleDelete(medication)}>
-                        {isMedicationBusy ? "Working…" : "Delete"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <dl className="detail-grid">
-                    <div>
-                      <dt>Schedule</dt>
-                      <dd>
-                        {medication.schedules.map((schedule) => (
-                          <span className="schedule-chip" key={schedule.id}>
-                            {schedule.scheduledTime}
+              return (
+                <article className="card medication-record" key={medication.id}>
+                  <div className="medication-record-main">
+                    <div className="medication-title-row">
+                      <div>
+                        <div className="badge-row">
+                          <span
+                            className={`badge badge-${medication.status.toLowerCase()}`}
+                          >
+                            {formatEnumLabel(medication.status)}
                           </span>
-                        ))}
-                      </dd>
+                          {isMedicationLowSupply(medication) && (
+                            <span className="badge badge-pending">
+                              Running low
+                            </span>
+                          )}
+                        </div>
+                        <h2>{medication.name}</h2>
+                        <p className="medication-dose">{medication.dosage}</p>
+                      </div>
+                      <div className="row-actions">
+                        <button
+                          className="button button-ghost button-small"
+                          type="button"
+                          disabled={mutationKey !== null}
+                          onClick={() => openEditForm(medication)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="button button-danger-ghost button-small"
+                          type="button"
+                          disabled={mutationKey !== null}
+                          onClick={() => void handleDelete(medication)}
+                        >
+                          {isMedicationBusy ? "Working…" : "Delete"}
+                        </button>
+                      </div>
                     </div>
-                    <div>
-                      <dt>Treatment dates</dt>
-                      <dd>{formatDate(medication.startDate)} – {formatDate(medication.endDate)}</dd>
-                    </div>
-                    <div className="detail-wide">
-                      <dt>Instructions</dt>
-                      <dd>{medication.instructions || "No special instructions"}</dd>
-                    </div>
-                  </dl>
 
-                  <label className="lifecycle-control">
-                    <span>Lifecycle status</span>
-                    <select
-                      value={medication.status}
-                      disabled={mutationKey !== null}
-                      onChange={(event) =>
-                        void updateMedication(medication.id, {
-                          status: event.target.value as MedicationStatus,
-                        })
-                      }
-                    >
-                      {medicationStatuses
-                        .filter(
-                          (status) =>
-                            medication.status === "ACTIVE" || status !== "ACTIVE",
-                        )
-                        .map((status) => (
-                          <option key={status} value={status}>{formatEnumLabel(status)}</option>
-                        ))}
-                    </select>
-                  </label>
-                </div>
+                    <dl className="detail-grid">
+                      <div>
+                        <dt>Schedule</dt>
+                        <dd>
+                          {medication.schedules.map((schedule) => (
+                            <span className="schedule-chip" key={schedule.id}>
+                              {schedule.scheduledTime}
+                            </span>
+                          ))}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Treatment dates</dt>
+                        <dd>
+                          {formatDate(medication.startDate)} –{" "}
+                          {formatDate(medication.endDate)}
+                        </dd>
+                      </div>
+                      <div className="detail-wide">
+                        <dt>Instructions</dt>
+                        <dd>
+                          {medication.instructions || "No special instructions"}
+                        </dd>
+                      </div>
+                    </dl>
 
-                <div className="dose-panel">
-                  <div className="dose-panel-heading">
-                    <div>
-                      <p className="eyebrow">Today</p>
-                      <h3>Scheduled doses</h3>
-                    </div>
-                    <span className="dose-count">{medicationLogs.length}</span>
+                    <MedicationRefillPanel
+                      medication={medication}
+                      mutationKey={mutationKey}
+                      onUpdate={updateMedicationRefill}
+                    />
+
+                    <label className="lifecycle-control">
+                      <span>Lifecycle status</span>
+                      <select
+                        value={medication.status}
+                        disabled={mutationKey !== null}
+                        onChange={(event) =>
+                          void updateMedication(medication.id, {
+                            status: event.target.value as MedicationStatus,
+                          })
+                        }
+                      >
+                        {medicationStatuses
+                          .filter(
+                            (status) =>
+                              medication.status === "ACTIVE" ||
+                              status !== "ACTIVE",
+                          )
+                          .map((status) => (
+                            <option key={status} value={status}>
+                              {formatEnumLabel(status)}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
                   </div>
 
-                  {medicationLogs.length === 0 ? (
-                    <p className="muted-message">No dose logs are scheduled for today.</p>
-                  ) : (
-                    <div className="dose-list">
-                      {medicationLogs.map((log) => (
-                        <div className="dose-row" key={log.id}>
-                          <div className="dose-row-heading">
-                            <strong>
-                              {formatMedicationDoseTime(
+                  <div className="dose-panel">
+                    <div className="dose-panel-heading">
+                      <div>
+                        <p className="eyebrow">Today</p>
+                        <h3>Scheduled doses</h3>
+                      </div>
+                      <span className="dose-count">
+                        {medicationLogs.length}
+                      </span>
+                    </div>
+
+                    {medicationLogs.length === 0 ? (
+                      <p className="muted-message">
+                        No dose logs are scheduled for today.
+                      </p>
+                    ) : (
+                      <div className="dose-list">
+                        {medicationLogs.map((log) => (
+                          <div className="dose-row" key={log.id}>
+                            <div className="dose-row-heading">
+                              <strong>
+                                {formatMedicationDoseTime(
+                                  log.scheduledFor,
+                                  medication.timeZone,
+                                )}
+                              </strong>
+                              <span
+                                className={`badge badge-${log.status.toLowerCase()}`}
+                              >
+                                {formatEnumLabel(log.status)}
+                              </span>
+                            </div>
+                            <div
+                              className="dose-actions"
+                              aria-label={`Set ${formatMedicationDoseTime(
                                 log.scheduledFor,
                                 medication.timeZone,
-                              )}
-                            </strong>
-                            <span className={`badge badge-${log.status.toLowerCase()}`}>
-                              {formatEnumLabel(log.status)}
-                            </span>
+                              )} dose status`}
+                            >
+                              {medicationLogStatuses.map((status) => (
+                                <button
+                                  key={status}
+                                  type="button"
+                                  className={`dose-action dose-action-${status.toLowerCase()}${log.status === status ? " is-selected" : ""}`}
+                                  disabled={
+                                    mutationKey !== null ||
+                                    log.status === status
+                                  }
+                                  onClick={() =>
+                                    void updateMedicationLogStatus(
+                                      medication.id,
+                                      log.id,
+                                      status,
+                                    )
+                                  }
+                                >
+                                  {mutationKey === `log:${log.id}`
+                                    ? "Saving…"
+                                    : formatEnumLabel(status)}
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                          <div
-                            className="dose-actions"
-                            aria-label={`Set ${formatMedicationDoseTime(
-                              log.scheduledFor,
-                              medication.timeZone,
-                            )} dose status`}
-                          >
-                            {medicationLogStatuses.map((status) => (
-                              <button
-                                key={status}
-                                type="button"
-                                className={`dose-action dose-action-${status.toLowerCase()}${log.status === status ? " is-selected" : ""}`}
-                                disabled={mutationKey !== null || log.status === status}
-                                onClick={() =>
-                                  void updateMedicationLogStatus(
-                                    medication.id,
-                                    log.id,
-                                    status,
-                                  )
-                                }
-                              >
-                                {mutationKey === `log:${log.id}` ? "Saving…" : formatEnumLabel(status)}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </article>
-            );
-          })}
-        </section>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+          {totalPages > 1 && (
+            <nav className="pagination-controls" aria-label="Medication pages">
+              <button
+                type="button"
+                className="button button-secondary button-small"
+                disabled={page === 1 || isLoading}
+                onClick={() => setPage((current) => current - 1)}
+              >
+                Previous
+              </button>
+              <span>
+                Page {page} of {totalPages} · {pagination.total} medications
+              </span>
+              <button
+                type="button"
+                className="button button-secondary button-small"
+                disabled={page === totalPages || isLoading}
+                onClick={() => setPage((current) => current + 1)}
+              >
+                Next
+              </button>
+            </nav>
+          )}
+        </>
       )}
     </main>
   );

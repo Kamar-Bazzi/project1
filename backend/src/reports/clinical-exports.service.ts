@@ -2,6 +2,8 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 
 import {
+  ClinicalDataCategory,
+  ClinicalDataPermissions,
   ClinicalAccessService,
   ClinicalActor,
 } from '../common/clinical-access/clinical-access.service';
@@ -113,24 +115,25 @@ export class ClinicalExportsService {
     dataset: ClinicalExportDataset,
     query: ClinicalExportQueryDto,
   ): Promise<ClinicalExportFile> {
-    const { patient } = await this.access.resolvePatientForActor(
+    const { patient, permissions } = await this.access.resolvePatientForActor(
       actor,
       query.patientId,
     );
+    const requiredCategory = this.categoryForDataset(dataset);
+    if (actor.role === UserRole.DOCTOR && requiredCategory) {
+      this.access.assertCategoryAllowed(permissions, requiredCategory);
+    }
     const { from, to } = this.dateRange(query.from, query.to);
-    const patientScope: Prisma.PatientWhereInput =
-      actor.role === UserRole.DOCTOR
-        ? {
-            id: patient.id,
-            doctorAccessGrants: {
-              some: {
-                active: true,
-                doctor: { userId: actor.id },
-              },
-            },
-          }
-        : { id: patient.id };
-    const rows = await this.datasetRows(dataset, patientScope, from, to);
+    const patientScope = this.patientScope(actor, patient.id, requiredCategory);
+    const rows = await this.datasetRows(
+      dataset,
+      patientScope,
+      from,
+      to,
+      permissions,
+      actor,
+      patient.id,
+    );
     await this.audit.record({
       userId: actor.id,
       action: 'CLINICAL_DATA_EXPORTED',
@@ -159,6 +162,9 @@ export class ClinicalExportsService {
     patient: Prisma.PatientWhereInput,
     from: Date,
     to: Date,
+    permissions: ClinicalDataPermissions,
+    actor: ClinicalActor,
+    patientId: string,
   ): Promise<ExportRow[]> {
     const range = { gte: from, lte: to };
     if (dataset === ClinicalExportDataset.MEASUREMENTS) {
@@ -234,15 +240,35 @@ export class ClinicalExportsService {
       }));
     }
 
-    return this.medicalHistoryRows(patient, from, to);
+    return this.medicalHistoryRows(
+      patient,
+      from,
+      to,
+      permissions,
+      actor,
+      patientId,
+    );
   }
 
   private async medicalHistoryRows(
     patient: Prisma.PatientWhereInput,
     from: Date,
     to: Date,
+    permissions: ClinicalDataPermissions,
+    actor: ClinicalActor,
+    patientId: string,
   ): Promise<ExportRow[]> {
     const range = { gte: from, lte: to };
+    const excludedPatient: Prisma.PatientWhereInput = { id: '__excluded__' };
+    const medicationPatient = permissions.medicationsAllowed
+      ? this.patientScope(actor, patientId, 'MEDICATIONS')
+      : excludedPatient;
+    const measurementPatient = permissions.measurementsAllowed
+      ? this.patientScope(actor, patientId, 'MEASUREMENTS')
+      : excludedPatient;
+    const wearablePatient = permissions.wearableDataAllowed
+      ? this.patientScope(actor, patientId, 'WEARABLE_DATA')
+      : excludedPatient;
     const [
       medications,
       logs,
@@ -254,28 +280,31 @@ export class ClinicalExportsService {
       followUps,
     ] = await Promise.all([
       this.prisma.medication.findMany({
-        where: { patient, createdAt: range },
+        where: { patient: medicationPatient, createdAt: range },
         orderBy: { createdAt: 'desc' },
         take: 10_000,
       }),
       this.prisma.medicationLog.findMany({
-        where: { medication: { patient }, scheduledFor: range },
+        where: {
+          medication: { patient: medicationPatient },
+          scheduledFor: range,
+        },
         include: { medication: { select: { name: true, dosage: true } } },
         orderBy: { scheduledFor: 'desc' },
         take: 10_000,
       }),
       this.prisma.measurement.findMany({
-        where: { patient, measuredAt: range },
+        where: { patient: measurementPatient, measuredAt: range },
         orderBy: { measuredAt: 'desc' },
         take: 10_000,
       }),
       this.prisma.healthMetric.findMany({
-        where: { patient, measuredAt: range },
+        where: { patient: wearablePatient, measuredAt: range },
         orderBy: { measuredAt: 'desc' },
         take: 10_000,
       }),
       this.prisma.healthAlert.findMany({
-        where: { patient, detectedAt: range },
+        where: { patient: wearablePatient, detectedAt: range },
         orderBy: { detectedAt: 'desc' },
         take: 10_000,
       }),
@@ -373,6 +402,44 @@ export class ClinicalExportsService {
     return rows.sort((first, second) =>
       second.occurredAt.localeCompare(first.occurredAt),
     );
+  }
+
+  private categoryForDataset(
+    dataset: ClinicalExportDataset,
+  ): ClinicalDataCategory | undefined {
+    if (dataset === ClinicalExportDataset.MEASUREMENTS) return 'MEASUREMENTS';
+    if (dataset === ClinicalExportDataset.ADHERENCE) return 'MEDICATIONS';
+    if (dataset === ClinicalExportDataset.WEARABLES) return 'WEARABLE_DATA';
+    return undefined;
+  }
+
+  private patientScope(
+    actor: ClinicalActor,
+    patientId: string,
+    category?: ClinicalDataCategory,
+  ): Prisma.PatientWhereInput {
+    if (actor.role !== UserRole.DOCTOR) return { id: patientId };
+
+    const categoryPermission =
+      category === 'MEDICATIONS'
+        ? { medicationsAllowed: true }
+        : category === 'MEASUREMENTS'
+          ? { measurementsAllowed: true }
+          : category === 'WEARABLE_DATA'
+            ? { wearableDataAllowed: true }
+            : category === 'DOCUMENTS'
+              ? { documentsAllowed: true }
+              : {};
+    return {
+      id: patientId,
+      doctorAccessGrants: {
+        some: {
+          active: true,
+          doctor: { userId: actor.id },
+          ...categoryPermission,
+        },
+      },
+    };
   }
 
   private dateRange(from?: string, to?: string) {

@@ -37,7 +37,14 @@ off-site backup services are separate third-party trust boundaries.
   mass assignment. Request bodies are bounded at the gateway.
 - Nest applies security headers and a 120-request/minute application limit.
   NGINX adds an edge burst limit and passes the real client address through one
-  trusted proxy hop.
+  trusted proxy hop. Coalesced application rate-limit events are retained in
+  the audit trail for the administrator security dashboard.
+- Successful sign-ins from both an unseen browser context and network, rapid
+  context changes, and success after repeated failures are audited and alert
+  the account owner without blocking the sign-in. Ten consecutive invalid
+  credentials within the configured window create a 15-minute login-only lock
+  by default; password reset or an administrator can clear it sooner. Existing
+  sessions are not revoked merely because an attacker caused a lock.
 - CORS has an explicit HTTPS origin in production. TLS 1.2/1.3 and HSTS are
   enabled at the gateway.
 - Runtime secrets exist only in environment variables supplied by a secret
@@ -65,6 +72,7 @@ off-site backup services are separate third-party trust boundaries.
 | Mass assignment                            | Whitelist plus `forbidNonWhitelisted`        | Supplied `role` or `patientId` receives `400`                           |
 | Malformed path/body                        | DTO validation and parsing pipes             | Invalid UUID/body receives `400` before service access                  |
 | Brute force or request flood               | Route-specific, application, and edge limits | Login request 6 and generic request 121 receive `429`                   |
+| Abnormal login context                     | Risk signals, owner alert, temporary lock     | Unit tests cover context scoring, conservative lock, and rate audit     |
 | Deleted/deactivated account uses old token | Database user/session reload                 | Deleted-user JWT receives `401`                                         |
 | Stolen database backup                     | Encrypted restricted storage plus retention  | Restore drill and storage-policy review                                 |
 

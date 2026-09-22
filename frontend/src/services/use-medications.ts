@@ -3,50 +3,87 @@ import type {
   Medication,
   MedicationInput,
   MedicationLogStatus,
+  MedicationRefillInput,
   UpdateMedicationInput,
 } from "../types/medication";
 import { getApiErrorMessage } from "./api-error";
-import { medicationService } from "./medication.service";
+import {
+  medicationService,
+  type MedicationListFilters,
+} from "./medication.service";
 
-export function useMedications() {
+export function useMedications(filters?: MedicationListFilters) {
+  const usesPagedList = filters !== undefined;
+  const page = filters?.page ?? 1;
+  const pageSize = filters?.pageSize ?? 20;
+  const search = filters?.search;
+  const status = filters?.status;
+  const doseStatus = filters?.doseStatus;
   const [medications, setMedications] = useState<Medication[]>([]);
+  const [pagination, setPagination] = useState({
+    page,
+    pageSize,
+    total: 0,
+    totalPages: 0,
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [mutationKey, setMutationKey] = useState<string | null>(null);
   const requestId = useRef(0);
 
-  const refresh = useCallback(async (silent = false): Promise<boolean> => {
-    const currentRequestId = ++requestId.current;
+  const refresh = useCallback(
+    async (silent = false): Promise<boolean> => {
+      const currentRequestId = ++requestId.current;
 
-    if (!silent) {
-      setIsLoading(true);
-    }
-    setError(null);
+      if (!silent) {
+        setIsLoading(true);
+      }
+      setError(null);
 
-    try {
-      const nextMedications = await medicationService.list();
+      try {
+        const result = usesPagedList
+          ? await medicationService.listPage({
+              page,
+              pageSize,
+              search,
+              status,
+              doseStatus,
+            })
+          : undefined;
+        const nextMedications =
+          result?.items ?? (await medicationService.list());
 
-      if (requestId.current === currentRequestId) {
-        setMedications(nextMedications);
+        if (requestId.current === currentRequestId) {
+          setMedications(nextMedications);
+          setPagination({
+            ...(result?.pagination ?? {
+              page: 1,
+              pageSize: nextMedications.length,
+              total: nextMedications.length,
+              totalPages: nextMedications.length > 0 ? 1 : 0,
+            }),
+          });
+        }
+        return true;
+      } catch (requestError) {
+        if (requestId.current === currentRequestId) {
+          setError(
+            getApiErrorMessage(
+              requestError,
+              "We could not load your medications. Please try again.",
+            ),
+          );
+        }
+        return false;
+      } finally {
+        if (requestId.current === currentRequestId) {
+          setIsLoading(false);
+        }
       }
-      return true;
-    } catch (requestError) {
-      if (requestId.current === currentRequestId) {
-        setError(
-          getApiErrorMessage(
-            requestError,
-            "We could not load your medications. Please try again.",
-          ),
-        );
-      }
-      return false;
-    } finally {
-      if (requestId.current === currentRequestId) {
-        setIsLoading(false);
-      }
-    }
-  }, []);
+    },
+    [doseStatus, page, pageSize, search, status, usesPagedList],
+  );
 
   useEffect(() => {
     void refresh();
@@ -71,6 +108,9 @@ export function useMedications() {
         setError(null);
         setIsLoading(false);
         commit(result);
+        if (usesPagedList) {
+          void refresh(true);
+        }
         return true;
       } catch (requestError) {
         setActionError(getApiErrorMessage(requestError, fallbackMessage));
@@ -79,7 +119,7 @@ export function useMedications() {
         setMutationKey(null);
       }
     },
-    [],
+    [refresh, usesPagedList],
   );
 
   const addMedication = useCallback(
@@ -173,8 +213,27 @@ export function useMedications() {
     [runMutation],
   );
 
+  const updateMedicationRefill = useCallback(
+    (medicationId: string, input: MedicationRefillInput) =>
+      runMutation(
+        `refill:${medicationId}`,
+        () => medicationService.updateRefill(medicationId, input),
+        (updatedMedication) =>
+          setMedications((currentMedications) =>
+            currentMedications.map((medication) =>
+              medication.id === updatedMedication.id
+                ? updatedMedication
+                : medication,
+            ),
+          ),
+        "The refill details could not be updated. Please try again.",
+      ),
+    [runMutation],
+  );
+
   return {
     medications,
+    pagination,
     isLoading,
     error,
     actionError,
@@ -185,5 +244,6 @@ export function useMedications() {
     updateMedication,
     deleteMedication,
     updateMedicationLogStatus,
+    updateMedicationRefill,
   };
 }

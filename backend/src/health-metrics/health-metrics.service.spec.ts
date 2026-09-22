@@ -25,6 +25,7 @@ describe('HealthMetricsService', () => {
   const metricCreateMany = jest.fn();
   const deviceFindFirst = jest.fn();
   const deviceUpdateMany = jest.fn();
+  const syncRunCreate = jest.fn();
   const evaluateMetric = jest.fn();
   const auditRecord = jest.fn();
 
@@ -38,6 +39,7 @@ describe('HealthMetricsService', () => {
       findFirst: deviceFindFirst,
       updateMany: deviceUpdateMany,
     },
+    wearableSyncRun: { create: syncRunCreate },
   };
   const executeTransaction = (
     callback: (client: typeof transaction) => unknown,
@@ -51,11 +53,13 @@ describe('HealthMetricsService', () => {
   const audit = { record: auditRecord };
   const requireOwnedDeviceForUser = jest.fn();
   const generateDemoMeasurements = jest.fn();
+  const providerSync = jest.fn();
   const wearables = { requireOwnedDeviceForUser };
   const providerRegistry = {
     get: jest.fn(() => ({
       isDemo: true,
       generateDemoMeasurements,
+      sync: providerSync,
     })),
   };
   let service: HealthMetricsService;
@@ -97,10 +101,14 @@ describe('HealthMetricsService', () => {
     metricCreateMany.mockResolvedValue({ count: 0 });
     deviceFindFirst.mockResolvedValue(device);
     deviceUpdateMany.mockResolvedValue({ count: 1 });
+    syncRunCreate.mockImplementation(({ data }: { data: unknown }) =>
+      Promise.resolve(data),
+    );
     evaluateMetric.mockResolvedValue(null);
     auditRecord.mockResolvedValue(undefined);
     requireOwnedDeviceForUser.mockResolvedValue(device);
     generateDemoMeasurements.mockReturnValue([]);
+    providerSync.mockResolvedValue({ measurements: [] });
     service = new HealthMetricsService(
       prisma as unknown as PrismaService,
       evaluator as unknown as HealthAlertEvaluatorService,
@@ -222,9 +230,14 @@ describe('HealthMetricsService', () => {
 
     expect(result).toEqual(
       expect.objectContaining({
+        syncRunId: expect.any(String) as string,
+        status: 'SUCCESS',
         receivedCount: 1,
         createdCount: 1,
         duplicateCount: 0,
+        rejectedCount: 0,
+        errorCount: 0,
+        errors: [],
       }),
     );
     expect(result.metrics[0]).toEqual(
@@ -262,6 +275,21 @@ describe('HealthMetricsService', () => {
       active: true,
     });
     expect(updateManyCalls[0][0].data.lastSyncAt).toBeInstanceOf(Date);
+    expect(syncRunCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: result.syncRunId,
+        patientId: 'patient-1',
+        wearableDeviceId: device.id,
+        provider: WearableProvider.MOCK,
+        status: 'SUCCESS',
+        receivedCount: 1,
+        importedCount: 1,
+        duplicateCount: 0,
+        rejectedCount: 0,
+        errorCount: 0,
+        completedAt: expect.any(Date) as Date,
+      }) as unknown,
+    });
   });
 
   it('reports duplicate sync rows and does not evaluate them again', async () => {
@@ -315,20 +343,22 @@ describe('HealthMetricsService', () => {
   });
 
   it('routes generated demo measurements through the regular synchronization flow', async () => {
-    generateDemoMeasurements.mockReturnValue([
-      {
-        metricType: HealthMetricType.HEART_RATE,
-        value: 76,
-        unit: 'bpm',
-        measuredAt: new Date('2026-08-08T10:00:00.000Z'),
-        source: HealthMetricSource.MOCK,
-        externalRecordId: 'demo-heart-rate',
-        metadata: {
-          demo: true,
-          disclaimer: 'Generated demo data; not a real medical reading.',
+    providerSync.mockResolvedValue({
+      measurements: [
+        {
+          metricType: HealthMetricType.HEART_RATE,
+          value: 76,
+          unit: 'bpm',
+          measuredAt: new Date('2026-08-08T10:00:00.000Z'),
+          source: HealthMetricSource.MOCK,
+          externalRecordId: 'demo-heart-rate',
+          metadata: {
+            demo: true,
+            disclaimer: 'Generated demo data; not a real medical reading.',
+          },
         },
-      },
-    ]);
+      ],
+    });
 
     await service.syncDemoForPatient('user-1', device.id);
 
@@ -351,6 +381,7 @@ describe('HealthMetricsService', () => {
     expect(demoData[0].metadata).toEqual(
       expect.objectContaining({ demo: true }),
     );
+    expect(providerSync).toHaveBeenCalledWith(device, { userId: 'user-1' });
   });
 
   it('does not accept a wearable owned by another patient', async () => {

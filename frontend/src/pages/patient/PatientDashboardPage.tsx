@@ -5,6 +5,13 @@ import HealthGoalsPanel from "../../components/goals/HealthGoalsPanel";
 import WearableHealthSection from "../../components/health/WearableHealthSection";
 import MedicationCard from "../../components/medications/MedicationCard";
 import NotificationsPanel from "../../components/notifications/NotificationsPanel";
+import DailyCheckInPanel from "../../components/check-ins/DailyCheckInPanel";
+import {
+  PatientCalendar,
+  PatientComparisonCards,
+  PatientGlobalSearch,
+} from "../../components/dashboard/PatientDashboardInsights";
+import WellnessSnapshot from "../../components/wellness/WellnessSnapshot";
 import { useMedications } from "../../services/use-medications";
 import { getTodaysMedicationLogs } from "../../types/medication";
 
@@ -66,6 +73,10 @@ export default function PatientDashboardPage() {
 
       {actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
 
+      <WellnessSnapshot />
+
+      <DailyCheckInPanel />
+
       <section className="summary-grid" aria-label="Today's medication summary">
         <article className="summary-card">
           <span className="summary-icon summary-icon-blue" aria-hidden="true">Rx</span>
@@ -89,6 +100,12 @@ export default function PatientDashboardPage() {
 
       <div className="dashboard-content-grid">
         <section className="dashboard-primary-column">
+          <PatientGlobalSearch />
+
+          <PatientComparisonCards />
+
+          <PatientCalendar />
+
           <div className="section-heading section-heading-actions">
             <div>
               <p className="eyebrow">Treatment</p>
@@ -152,6 +169,21 @@ export default function PatientDashboardPage() {
             <Link className="quick-action" to="/measurements">
               <span className="quick-action-icon summary-icon-teal" aria-hidden="true">＋</span>
               <span><strong>Record a measurement</strong><small>Blood pressure, weight, glucose, and more</small></span>
+              <span aria-hidden="true">›</span>
+            </Link>
+            <Link className="quick-action" to="/symptoms">
+              <span className="quick-action-icon summary-icon-amber" aria-hidden="true">S</span>
+              <span><strong>Record a symptom</strong><small>Add severity, notes, and related records</small></span>
+              <span aria-hidden="true">›</span>
+            </Link>
+            <Link className="quick-action" to="/check-ins">
+              <span className="quick-action-icon summary-icon-violet" aria-hidden="true">✓</span>
+              <span><strong>Review daily check-ins</strong><small>See mood, sleep, activity, and pain entries</small></span>
+              <span aria-hidden="true">›</span>
+            </Link>
+            <Link className="quick-action" to="/documents">
+              <span className="quick-action-icon summary-icon-blue" aria-hidden="true">D</span>
+              <span><strong>Manage documents</strong><small>Upload and open private health files</small></span>
               <span aria-hidden="true">›</span>
             </Link>
             <Link className="quick-action" to="/medications">

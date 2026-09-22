@@ -5,12 +5,14 @@ import {
 } from '@nestjs/common';
 import { MedicationLogStatus, MedicationStatus, Prisma } from '@prisma/client';
 
+import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   DEFAULT_TIME_ZONE,
   isIanaTimeZone,
 } from '../common/validators/is-iana-time-zone.validator';
 import { CreateMedicationDto } from './dto/create-medication.dto';
+import { MedicationQueryDto } from './dto/medication-query.dto';
 import { UpdateMedicationLogStatusDto } from './dto/update-medication-log-status.dto';
 import { UpdateMedicationDto } from './dto/update-medication.dto';
 
@@ -167,6 +169,139 @@ export class MedicationsService {
       return responses.map((response) =>
         this.withTimeZone(response, patient.timeZone),
       );
+    });
+  }
+
+  async findPage(
+    userId: string,
+    query: MedicationQueryDto,
+    requestedTimeZone?: string,
+  ) {
+    const validRequestedTimeZone =
+      this.resolveRequestedTimeZone(requestedTimeZone);
+
+    return this.runSerializableTransaction(async (transaction) => {
+      const patient = await this.getSchedulingPatient(
+        transaction,
+        userId,
+        validRequestedTimeZone,
+      );
+      const today = this.getZonedDay(patient.timeZone);
+      const baseWhere: Prisma.MedicationWhereInput = {
+        patientId: patient.id,
+        status: query.status,
+        OR: query.search
+          ? [
+              { name: { contains: query.search, mode: 'insensitive' } },
+              { dosage: { contains: query.search, mode: 'insensitive' } },
+              {
+                instructions: {
+                  contains: query.search,
+                  mode: 'insensitive',
+                },
+              },
+            ]
+          : undefined,
+      };
+
+      if (
+        query.doseStatus &&
+        (!query.status || query.status === MedicationStatus.ACTIVE)
+      ) {
+        const schedulableMedications = await transaction.medication.findMany({
+          where: {
+            ...baseWhere,
+            status: MedicationStatus.ACTIVE,
+          },
+          select: {
+            id: true,
+            status: true,
+            startDate: true,
+            endDate: true,
+            schedules: {
+              select: { id: true, scheduledTime: true, createdAt: true },
+            },
+          },
+        });
+        await this.ensureTodaysLogs(
+          transaction,
+          patient.id,
+          schedulableMedications,
+          patient.timeZone,
+          today,
+          patient.isCanonicalTimeZone,
+        );
+      }
+
+      const where: Prisma.MedicationWhereInput = {
+        ...baseWhere,
+        logs: query.doseStatus
+          ? {
+              some: {
+                status: query.doseStatus,
+                scheduledFor: { gte: today.start, lt: today.end },
+              },
+            }
+          : undefined,
+      };
+      const [total, medications] = await Promise.all([
+        transaction.medication.count({ where }),
+        transaction.medication.findMany({
+          where,
+          select: {
+            id: true,
+            status: true,
+            startDate: true,
+            endDate: true,
+            schedules: {
+              select: { id: true, scheduledTime: true, createdAt: true },
+            },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+        }),
+      ]);
+      await this.ensureTodaysLogs(
+        transaction,
+        patient.id,
+        query.doseStatus ? [] : medications,
+        patient.timeZone,
+        today,
+        patient.isCanonicalTimeZone,
+      );
+      const responses = await transaction.medication.findMany({
+        where: {
+          id: { in: medications.map(({ id }) => id) },
+          patientId: patient.id,
+        },
+        include: this.responseRelations(patient.id),
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const responseById = new Map(responses.map((item) => [item.id, item]));
+      const orderedResponses = medications.flatMap((medication) => {
+        const response = responseById.get(medication.id);
+        return response ? [response] : [];
+      });
+
+      await this.recordAudit(transaction, userId, 'MEDICAL_RECORD_ACCESSED', {
+        entity: 'Medication',
+        patientId: patient.id,
+        metadata: {
+          resultCount: orderedResponses.length,
+          operation: 'PAGINATED_LIST',
+          page: query.page,
+          hasSearch: Boolean(query.search),
+          status: query.status ?? null,
+          doseStatus: query.doseStatus ?? null,
+        },
+      });
+      return {
+        items: orderedResponses.map((response) =>
+          this.withTimeZone(response, patient.timeZone),
+        ),
+        pagination: paginationMetadata(query.page, query.pageSize, total),
+      };
     });
   }
 
@@ -1222,9 +1357,23 @@ export class MedicationsService {
   }
 
   private withTimeZone<T extends object>(medication: T, timeZone: string) {
+    const refill = medication as T & {
+      name?: string;
+      remainingQuantity?: number | null;
+      lowQuantityThreshold?: number | null;
+    };
+    const tracked =
+      typeof refill.remainingQuantity === 'number' &&
+      typeof refill.lowQuantityThreshold === 'number';
+    const low =
+      tracked && refill.remainingQuantity! <= refill.lowQuantityThreshold!;
     return {
       ...medication,
       timeZone,
+      refillStatus: tracked ? (low ? 'LOW' : 'OK') : 'NOT_TRACKED',
+      lowSupplyWarning: low
+        ? `${refill.name ?? 'This medication'} is at or below the saved low-supply threshold. Review refill needs with the pharmacy or care team.`
+        : null,
     };
   }
 

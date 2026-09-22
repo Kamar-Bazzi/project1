@@ -2,7 +2,6 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -24,11 +23,17 @@ interface MeasurementDraft {
   measuredAt: string;
 }
 
+const MEASUREMENT_PAGE_SIZE = 20;
+
 function nowForDateTimeInput(): string {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
     .toISOString()
     .slice(0, 16);
+}
+
+function todayForDateInput(): string {
+  return nowForDateTimeInput().slice(0, 10);
 }
 
 function createEmptyDraft(): MeasurementDraft {
@@ -67,6 +72,15 @@ function formatMeasurementValue(measurement: Measurement): string {
   return `${measurement.value}${secondary} ${measurement.unit}`;
 }
 
+function localDateBoundary(
+  value: string,
+  endOfDay: boolean,
+): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00"}`);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
 export default function MeasurementsPage() {
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -78,6 +92,15 @@ export default function MeasurementsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<MeasurementDraft>(createEmptyDraft);
   const [typeFilter, setTypeFilter] = useState<"ALL" | MeasurementType>("ALL");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: MEASUREMENT_PAGE_SIZE,
+    total: 0,
+    totalPages: 0,
+  });
   const requestId = useRef(0);
 
   const loadMeasurements = useCallback(async (): Promise<void> => {
@@ -87,10 +110,17 @@ export default function MeasurementsPage() {
     setLoadError(null);
 
     try {
-      const nextMeasurements = await measurementService.list();
+      const result = await measurementService.listPage({
+        page,
+        pageSize: MEASUREMENT_PAGE_SIZE,
+        type: typeFilter === "ALL" ? undefined : typeFilter,
+        from: localDateBoundary(fromDate, false),
+        to: localDateBoundary(toDate, true),
+      });
 
       if (requestId.current === currentRequestId) {
-        setMeasurements(nextMeasurements);
+        setMeasurements(result.items);
+        setPagination(result.pagination);
       }
     } catch (error) {
       if (requestId.current === currentRequestId) {
@@ -106,33 +136,32 @@ export default function MeasurementsPage() {
         setIsLoading(false);
       }
     }
-  }, []);
+  }, [fromDate, page, toDate, typeFilter]);
 
   useEffect(() => {
     void loadMeasurements();
   }, [loadMeasurements]);
 
-  const sortedMeasurements = useMemo(
-    () =>
-      [...measurements]
-        .filter((measurement) =>
-          typeFilter === "ALL" ? true : measurement.type === typeFilter,
-        )
-        .sort(
-          (first, second) =>
-            Date.parse(second.measuredAt) - Date.parse(first.measuredAt),
-        ),
-    [measurements, typeFilter],
-  );
+  const totalPages = Math.max(1, pagination.totalPages);
+
+  useEffect(() => {
+    setPage(1);
+  }, [fromDate, toDate, typeFilter]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   const recentCount = measurements.filter(
     (measurement) =>
-      Date.now() - Date.parse(measurement.measuredAt) <= 7 * 24 * 60 * 60 * 1000,
+      Date.now() - Date.parse(measurement.measuredAt) <=
+      7 * 24 * 60 * 60 * 1000,
   ).length;
-  const latestMeasurement = [...measurements].sort(
-    (first, second) => Date.parse(second.measuredAt) - Date.parse(first.measuredAt),
-  )[0];
-  const typeCount = new Set(measurements.map((measurement) => measurement.type)).size;
+  const latestMeasurement = measurements[0];
+  const typeCount = new Set(measurements.map((measurement) => measurement.type))
+    .size;
+  const hasFilters =
+    typeFilter !== "ALL" || Boolean(fromDate) || Boolean(toDate);
 
   function closeForm(): void {
     setIsFormOpen(false);
@@ -158,7 +187,9 @@ export default function MeasurementsPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
     event.preventDefault();
     setActionError(null);
     setSuccessMessage(null);
@@ -213,32 +244,27 @@ export default function MeasurementsPage() {
     setMutationKey(actionKey);
 
     try {
-      const savedMeasurement = editingId
-        ? await measurementService.update(editingId, input)
-        : await measurementService.create(input);
+      const wasEditing = Boolean(editingId);
+      if (editingId) {
+        await measurementService.update(editingId, input);
+      } else {
+        await measurementService.create(input);
+      }
 
       requestId.current += 1;
       setLoadError(null);
       setIsLoading(false);
-      setMeasurements((currentMeasurements) => {
-        const measurementExists = currentMeasurements.some(
-          (measurement) => measurement.id === savedMeasurement.id,
-        );
 
-        if (!measurementExists) {
-          return [savedMeasurement, ...currentMeasurements];
-        }
-
-        return currentMeasurements.map((measurement) =>
-          measurement.id === savedMeasurement.id
-            ? savedMeasurement
-            : measurement,
-        );
-      });
-
-      const message = editingId ? "Measurement updated." : "Measurement recorded.";
+      const message = editingId
+        ? "Measurement updated."
+        : "Measurement recorded.";
       closeForm();
       setSuccessMessage(message);
+      if (!wasEditing && page !== 1) {
+        setPage(1);
+      } else {
+        await loadMeasurements();
+      }
     } catch (error) {
       setActionError(
         getApiErrorMessage(
@@ -252,7 +278,11 @@ export default function MeasurementsPage() {
   }
 
   async function handleDelete(measurement: Measurement): Promise<void> {
-    if (!window.confirm(`Delete this ${measurementMetadata[measurement.type].label.toLowerCase()} reading?`)) {
+    if (
+      !window.confirm(
+        `Delete this ${measurementMetadata[measurement.type].label.toLowerCase()} reading?`,
+      )
+    ) {
       return;
     }
 
@@ -265,13 +295,12 @@ export default function MeasurementsPage() {
       requestId.current += 1;
       setLoadError(null);
       setIsLoading(false);
-      setMeasurements((currentMeasurements) =>
-        currentMeasurements.filter(
-          (currentMeasurement) =>
-            currentMeasurement.id !== measurement.id,
-        ),
-      );
       setSuccessMessage("Measurement deleted.");
+      if (measurements.length === 1 && page > 1) {
+        setPage((current) => current - 1);
+      } else {
+        await loadMeasurements();
+      }
     } catch (error) {
       setActionError(
         getApiErrorMessage(error, "The measurement could not be deleted."),
@@ -300,7 +329,10 @@ export default function MeasurementsPage() {
       </header>
 
       {isFormOpen && (
-        <section className="card form-card page-form" aria-labelledby="measurement-form-title">
+        <section
+          className="card form-card page-form"
+          aria-labelledby="measurement-form-title"
+        >
           <div className="section-heading section-heading-actions">
             <div>
               <h2 id="measurement-form-title">
@@ -319,7 +351,11 @@ export default function MeasurementsPage() {
             </button>
           </div>
 
-          {actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
+          {actionError && (
+            <div className="alert alert-error" role="alert">
+              {actionError}
+            </div>
+          )}
 
           <form className="form-stack" onSubmit={handleSubmit} noValidate>
             <div className="form-grid form-grid-three">
@@ -333,13 +369,16 @@ export default function MeasurementsPage() {
                     setDraft((current) => ({
                       ...current,
                       type,
-                      secondaryValue: type === "BLOOD_PRESSURE" ? current.secondaryValue : "",
+                      secondaryValue:
+                        type === "BLOOD_PRESSURE" ? current.secondaryValue : "",
                       unit: measurementMetadata[type].unit,
                     }));
                   }}
                 >
                   {measurementTypes.map((type) => (
-                    <option key={type} value={type}>{measurementMetadata[type].label}</option>
+                    <option key={type} value={type}>
+                      {measurementMetadata[type].label}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -353,7 +392,10 @@ export default function MeasurementsPage() {
                   value={draft.value}
                   disabled={mutationKey !== null}
                   onChange={(event) =>
-                    setDraft((current) => ({ ...current, value: event.target.value }))
+                    setDraft((current) => ({
+                      ...current,
+                      value: event.target.value,
+                    }))
                   }
                   placeholder="Enter value"
                   required
@@ -390,7 +432,9 @@ export default function MeasurementsPage() {
                   aria-describedby="measurement-unit-help"
                   required
                 />
-                <small id="measurement-unit-help">Unit is set for the selected type.</small>
+                <small id="measurement-unit-help">
+                  Unit is set for the selected type.
+                </small>
               </label>
 
               <label className="field">
@@ -412,10 +456,23 @@ export default function MeasurementsPage() {
             </div>
 
             <div className="form-actions">
-              <button className="button button-primary" type="submit" disabled={mutationKey !== null}>
-                {mutationKey ? "Saving…" : editingId ? "Save changes" : "Record measurement"}
+              <button
+                className="button button-primary"
+                type="submit"
+                disabled={mutationKey !== null}
+              >
+                {mutationKey
+                  ? "Saving…"
+                  : editingId
+                    ? "Save changes"
+                    : "Record measurement"}
               </button>
-              <button className="button button-secondary" type="button" disabled={mutationKey !== null} onClick={closeForm}>
+              <button
+                className="button button-secondary"
+                type="button"
+                disabled={mutationKey !== null}
+                onClick={closeForm}
+              >
                 Cancel
               </button>
             </div>
@@ -423,27 +480,56 @@ export default function MeasurementsPage() {
         </section>
       )}
 
-      {successMessage && <div className="alert alert-success" role="status">{successMessage}</div>}
-      {!isFormOpen && actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
+      {successMessage && (
+        <div className="alert alert-success" role="status">
+          {successMessage}
+        </div>
+      )}
+      {!isFormOpen && actionError && (
+        <div className="alert alert-error" role="alert">
+          {actionError}
+        </div>
+      )}
 
       <section className="summary-grid" aria-label="Measurement summary">
         <article className="summary-card">
-          <span className="summary-icon summary-icon-blue" aria-hidden="true">◇</span>
-          <div><p>Total readings</p><strong>{measurements.length}</strong></div>
+          <span className="summary-icon summary-icon-blue" aria-hidden="true">
+            ◇
+          </span>
+          <div>
+            <p>Matching readings</p>
+            <strong>{pagination.total}</strong>
+          </div>
         </article>
         <article className="summary-card">
-          <span className="summary-icon summary-icon-teal" aria-hidden="true">✓</span>
-          <div><p>Last 7 days</p><strong>{recentCount}</strong></div>
+          <span className="summary-icon summary-icon-teal" aria-hidden="true">
+            ✓
+          </span>
+          <div>
+            <p>Recent on page</p>
+            <strong>{recentCount}</strong>
+          </div>
         </article>
         <article className="summary-card">
-          <span className="summary-icon summary-icon-violet" aria-hidden="true">#</span>
-          <div><p>Types tracked</p><strong>{typeCount}</strong></div>
+          <span className="summary-icon summary-icon-violet" aria-hidden="true">
+            #
+          </span>
+          <div>
+            <p>Types on page</p>
+            <strong>{typeCount}</strong>
+          </div>
         </article>
         <article className="summary-card summary-card-wide-value">
-          <span className="summary-icon summary-icon-amber" aria-hidden="true">↗</span>
+          <span className="summary-icon summary-icon-amber" aria-hidden="true">
+            ↗
+          </span>
           <div>
             <p>Latest reading</p>
-            <strong>{latestMeasurement ? formatMeasurementValue(latestMeasurement) : "—"}</strong>
+            <strong>
+              {latestMeasurement
+                ? formatMeasurementValue(latestMeasurement)
+                : "—"}
+            </strong>
           </div>
         </article>
       </section>
@@ -454,20 +540,58 @@ export default function MeasurementsPage() {
             <h2>Measurement history</h2>
             <p>Your newest readings appear first.</p>
           </div>
-          <label className="compact-field">
-            <span className="sr-only">Filter measurement type</span>
-            <select
-              value={typeFilter}
-              onChange={(event) =>
-                setTypeFilter(event.target.value as "ALL" | MeasurementType)
-              }
-            >
-              <option value="ALL">All measurement types</option>
-              {measurementTypes.map((type) => (
-                <option key={type} value={type}>{measurementMetadata[type].label}</option>
-              ))}
-            </select>
-          </label>
+          <div className="row-actions">
+            <label className="compact-field">
+              <span className="sr-only">Filter measurement type</span>
+              <select
+                value={typeFilter}
+                onChange={(event) =>
+                  setTypeFilter(event.target.value as "ALL" | MeasurementType)
+                }
+              >
+                <option value="ALL">All measurement types</option>
+                {measurementTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {measurementMetadata[type].label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="compact-field">
+              <span className="sr-only">Measurements from date</span>
+              <input
+                type="date"
+                aria-label="Measurements from date"
+                value={fromDate}
+                max={toDate || todayForDateInput()}
+                onChange={(event) => setFromDate(event.target.value)}
+              />
+            </label>
+            <label className="compact-field">
+              <span className="sr-only">Measurements to date</span>
+              <input
+                type="date"
+                aria-label="Measurements to date"
+                value={toDate}
+                min={fromDate || undefined}
+                max={todayForDateInput()}
+                onChange={(event) => setToDate(event.target.value)}
+              />
+            </label>
+            {hasFilters && (
+              <button
+                type="button"
+                className="button button-ghost button-small"
+                onClick={() => {
+                  setTypeFilter("ALL");
+                  setFromDate("");
+                  setToDate("");
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         </div>
 
         {isLoading ? (
@@ -477,26 +601,33 @@ export default function MeasurementsPage() {
           </div>
         ) : loadError ? (
           <div className="inline-state" role="alert">
-            <span className="state-icon" aria-hidden="true">!</span>
+            <span className="state-icon" aria-hidden="true">
+              !
+            </span>
             <h3>Measurements unavailable</h3>
             <p>{loadError}</p>
-            <button className="button button-primary" onClick={() => void loadMeasurements()}>
+            <button
+              className="button button-primary"
+              onClick={() => void loadMeasurements()}
+            >
               Try again
             </button>
           </div>
-        ) : measurements.length === 0 ? (
+        ) : measurements.length === 0 && !hasFilters && page === 1 ? (
           <div className="inline-state empty-state">
-            <span className="state-icon" aria-hidden="true">＋</span>
+            <span className="state-icon" aria-hidden="true">
+              ＋
+            </span>
             <h3>No measurements yet</h3>
             <p>Record your first health reading to begin your history.</p>
             <button className="button button-primary" onClick={openCreateForm}>
               Record first measurement
             </button>
           </div>
-        ) : sortedMeasurements.length === 0 ? (
+        ) : measurements.length === 0 ? (
           <div className="inline-state empty-state">
             <h3>No matching readings</h3>
-            <p>Choose another measurement type to view its history.</p>
+            <p>Choose another measurement type or date range to view history.</p>
           </div>
         ) : (
           <div className="table-wrap">
@@ -506,19 +637,25 @@ export default function MeasurementsPage() {
                   <th>Type</th>
                   <th>Reading</th>
                   <th>Measured</th>
-                  <th><span className="sr-only">Actions</span></th>
+                  <th>
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {sortedMeasurements.map((measurement) => (
+                {measurements.map((measurement) => (
                   <tr key={measurement.id}>
                     <td>
                       <span className="measurement-type-cell">
-                        <span className={`measurement-dot measurement-dot-${measurement.type.toLowerCase().replace(/_/g, "-")}`} />
+                        <span
+                          className={`measurement-dot measurement-dot-${measurement.type.toLowerCase().replace(/_/g, "-")}`}
+                        />
                         {measurementMetadata[measurement.type].label}
                       </span>
                     </td>
-                    <td><strong>{formatMeasurementValue(measurement)}</strong></td>
+                    <td>
+                      <strong>{formatMeasurementValue(measurement)}</strong>
+                    </td>
                     <td>
                       <time dateTime={measurement.measuredAt}>
                         {new Date(measurement.measuredAt).toLocaleString([], {
@@ -529,11 +666,23 @@ export default function MeasurementsPage() {
                     </td>
                     <td>
                       <div className="row-actions">
-                        <button className="button button-ghost button-small" type="button" disabled={mutationKey !== null} onClick={() => openEditForm(measurement)}>
+                        <button
+                          className="button button-ghost button-small"
+                          type="button"
+                          disabled={mutationKey !== null}
+                          onClick={() => openEditForm(measurement)}
+                        >
                           Edit
                         </button>
-                        <button className="button button-danger-ghost button-small" type="button" disabled={mutationKey !== null} onClick={() => void handleDelete(measurement)}>
-                          {mutationKey === `delete:${measurement.id}` ? "Deleting…" : "Delete"}
+                        <button
+                          className="button button-danger-ghost button-small"
+                          type="button"
+                          disabled={mutationKey !== null}
+                          onClick={() => void handleDelete(measurement)}
+                        >
+                          {mutationKey === `delete:${measurement.id}`
+                            ? "Deleting…"
+                            : "Delete"}
                         </button>
                       </div>
                     </td>
@@ -541,6 +690,32 @@ export default function MeasurementsPage() {
                 ))}
               </tbody>
             </table>
+            {totalPages > 1 && (
+              <nav
+                className="pagination-controls"
+                aria-label="Measurement pages"
+              >
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  disabled={page === 1 || isLoading}
+                  onClick={() => setPage((current) => current - 1)}
+                >
+                  Previous
+                </button>
+                <span>
+                  Page {page} of {totalPages} · {pagination.total} readings
+                </span>
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  disabled={page === totalPages || isLoading}
+                  onClick={() => setPage((current) => current + 1)}
+                >
+                  Next
+                </button>
+              </nav>
+            )}
           </div>
         )}
       </section>

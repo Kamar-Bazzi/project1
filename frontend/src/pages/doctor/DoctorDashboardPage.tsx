@@ -3,13 +3,17 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getApiErrorMessage } from "../../services/api-error";
 import DoctorCareNotesPanel from "../../components/doctor/DoctorCareNotesPanel";
+import DoctorDocumentsPanel from "../../components/doctor/DoctorDocumentsPanel";
 import DoctorMonitoringPanel from "../../components/doctor/DoctorMonitoringPanel";
 import PatientMonitoringPanel from "../../components/doctor/PatientMonitoringPanel";
 import DoctorPatientHistoryPanel from "../../components/doctor/DoctorPatientHistoryPanel";
+import FollowUpPlansPanel from "../../components/doctor/FollowUpPlansPanel";
 import { appointmentService } from "../../services/appointment.service";
 import { doctorService } from "../../services/doctor.service";
 import type {
@@ -25,6 +29,9 @@ import {
   type Measurement,
 } from "../../types/measurement";
 import { formatEnumLabel } from "../../types/medication";
+
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function formatDateTime(value: string): string {
   const date = new Date(value);
@@ -67,6 +74,8 @@ function measurementValue(measurement: Pick<Measurement, "value" | "secondaryVal
 }
 
 export default function DoctorDashboardPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedPatientId = searchParams.get("patientId");
   const [dashboard, setDashboard] = useState<DoctorDashboard | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<DoctorPatientRecord | null>(null);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -74,6 +83,23 @@ export default function DoctorDashboardPage() {
   const [isPatientLoading, setIsPatientLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const patientRequestId = useRef(0);
+  const handledPatientQuery = useRef<string | null>(null);
+
+  const updatePatientQuery = useCallback(
+    (patientId: string | null): void => {
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          if (patientId) next.set("patientId", patientId);
+          else next.delete("patientId");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   const loadDashboard = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -91,20 +117,71 @@ export default function DoctorDashboardPage() {
     void loadDashboard();
   }, [loadDashboard]);
 
-  async function openPatient(patientId: string): Promise<void> {
-    setSelectedPatientId(patientId);
-    setSelectedPatient(null);
-    setIsPatientLoading(true);
-    setError(null);
-    try {
-      setSelectedPatient(await doctorService.getPatient(patientId));
-      window.setTimeout(() => document.getElementById("patient-record")?.scrollIntoView({ behavior: "smooth" }));
-    } catch (requestError) {
-      setError(getApiErrorMessage(requestError, "We could not load this assigned patient record."));
-      setSelectedPatientId(null);
-    } finally {
-      setIsPatientLoading(false);
+  const openPatient = useCallback(
+    async (patientId: string, syncQuery = true): Promise<void> => {
+      if (!UUID_V4_PATTERN.test(patientId)) {
+        setError("The patient link is invalid.");
+        if (syncQuery) updatePatientQuery(null);
+        return;
+      }
+
+      handledPatientQuery.current = patientId;
+      if (syncQuery) updatePatientQuery(patientId);
+      const requestId = ++patientRequestId.current;
+      setSelectedPatientId(patientId);
+      setSelectedPatient(null);
+      setIsPatientLoading(true);
+      setError(null);
+      try {
+        const patient = await doctorService.getPatient(patientId);
+        if (patientRequestId.current !== requestId) return;
+        setSelectedPatient(patient);
+        window.setTimeout(() =>
+          document
+            .getElementById("patient-record")
+            ?.scrollIntoView({ behavior: "smooth" }),
+        );
+      } catch (requestError) {
+        if (patientRequestId.current !== requestId) return;
+        setError(
+          getApiErrorMessage(
+            requestError,
+            "We could not load this assigned patient record.",
+          ),
+        );
+        setSelectedPatientId(null);
+        updatePatientQuery(null);
+      } finally {
+        if (patientRequestId.current === requestId) {
+          setIsPatientLoading(false);
+        }
+      }
+    },
+    [updatePatientQuery],
+  );
+
+  useEffect(() => {
+    if (!requestedPatientId) {
+      handledPatientQuery.current = null;
+      return;
     }
+    if (handledPatientQuery.current === requestedPatientId) return;
+
+    handledPatientQuery.current = requestedPatientId;
+    if (!UUID_V4_PATTERN.test(requestedPatientId)) {
+      updatePatientQuery(null);
+      setError("The patient link is invalid.");
+      return;
+    }
+    void openPatient(requestedPatientId, false);
+  }, [openPatient, requestedPatientId, updatePatientQuery]);
+
+  function closePatient(): void {
+    patientRequestId.current += 1;
+    updatePatientQuery(null);
+    setSelectedPatientId(null);
+    setSelectedPatient(null);
+    setIsPatientLoading(false);
   }
 
   if (isLoading && !dashboard) {
@@ -142,7 +219,7 @@ export default function DoctorDashboardPage() {
 
       {(selectedPatientId || selectedPatient) && (
         <section id="patient-record" className="card patient-record-panel">
-          <div className="section-heading section-heading-actions"><div><p className="eyebrow">Assigned patient record</p><h2>{selectedPatient?.user.name || "Loading patient…"}</h2><p>Read-only clinical context is limited to your active assignment.</p></div><button type="button" className="button button-ghost button-small" onClick={() => { setSelectedPatientId(null); setSelectedPatient(null); }}>Close record</button></div>
+          <div className="section-heading section-heading-actions"><div><p className="eyebrow">Assigned patient record</p><h2>{selectedPatient?.user.name || "Loading patient…"}</h2><p>Clinical access and follow-up tools are limited to your active assignment.</p></div><button type="button" className="button button-ghost button-small" onClick={closePatient}>Close record</button></div>
           {isPatientLoading ? <div className="inline-state"><span className="spinner" aria-hidden="true" /><p>Loading authorized patient data…</p></div> : selectedPatient && <PatientRecord patient={selectedPatient} />}
         </section>
       )}
@@ -209,7 +286,7 @@ function MedicationRow({ medication, onOpen }: { medication: DoctorMedication; o
 }
 
 function PatientRecord({ patient }: { patient: DoctorPatientRecord }) {
-  return <div className="patient-record-content"><dl className="patient-record-demographics"><div><dt>Email</dt><dd>{patient.user.email}</dd></div><div><dt>Age</dt><dd>{patientAge(patient.dateOfBirth)}</dd></div><div><dt>Phone</dt><dd>{patient.phoneNumber || "Not provided"}</dd></div><div><dt>Time zone</dt><dd>{patient.timeZone || "Not set"}</dd></div></dl><div className="patient-record-grid"><RecordList title="Medications" count={patient.medications.length}>{patient.medications.slice(0, 6).map((medication) => <div className="record-list-row" key={medication.id}><span><strong>{medication.name}</strong><small>{medication.dosage}</small></span><span className={`badge badge-${medication.status.toLowerCase()}`}>{formatEnumLabel(medication.status)}</span></div>)}</RecordList><RecordList title="Measurements" count={patient.measurements.length}>{patient.measurements.slice(0, 6).map((measurement) => <div className="record-list-row" key={measurement.id}><span><strong>{measurementMetadata[measurement.type].label}</strong><small>{formatDateTime(measurement.measuredAt)}</small></span><b>{measurementValue(measurement)}</b></div>)}</RecordList><RecordList title="Alerts" count={patient.healthAlerts.length}>{patient.healthAlerts.slice(0, 6).map((alert) => <div className="record-list-row" key={alert.id}><span><strong>{formatEnumLabel(alert.metricType)}</strong><small>{alert.message}</small></span><span className={`badge badge-${alert.severity === "URGENT" ? "cancelled" : "pending"}`}>{formatEnumLabel(alert.severity)}</span></div>)}</RecordList><RecordList title="Appointments" count={patient.appointments.length}>{patient.appointments.slice(0, 6).map((appointment) => <div className="record-list-row" key={appointment.id}><span><strong>{formatDateTime(appointment.appointmentDate)}</strong><small>{appointment.notes || "No notes"}</small></span><span className={`badge badge-${appointment.status.toLowerCase()}`}>{formatEnumLabel(appointment.status)}</span></div>)}</RecordList></div><DoctorPatientHistoryPanel patientId={patient.id} /><PatientMonitoringPanel patientId={patient.id} /><DoctorCareNotesPanel patientId={patient.id} appointments={patient.appointments} /></div>;
+  return <div className="patient-record-content"><dl className="patient-record-demographics"><div><dt>Email</dt><dd>{patient.user.email}</dd></div><div><dt>Age</dt><dd>{patientAge(patient.dateOfBirth)}</dd></div><div><dt>Phone</dt><dd>{patient.phoneNumber || "Not provided"}</dd></div><div><dt>Time zone</dt><dd>{patient.timeZone || "Not set"}</dd></div></dl><div className="patient-record-grid"><RecordList title="Medications" count={patient.medications.length}>{patient.medications.slice(0, 6).map((medication) => <div className="record-list-row" key={medication.id}><span><strong>{medication.name}</strong><small>{medication.dosage}</small></span><span className={`badge badge-${medication.status.toLowerCase()}`}>{formatEnumLabel(medication.status)}</span></div>)}</RecordList><RecordList title="Measurements" count={patient.measurements.length}>{patient.measurements.slice(0, 6).map((measurement) => <div className="record-list-row" key={measurement.id}><span><strong>{measurementMetadata[measurement.type].label}</strong><small>{formatDateTime(measurement.measuredAt)}</small></span><b>{measurementValue(measurement)}</b></div>)}</RecordList><RecordList title="Alerts" count={patient.healthAlerts.length}>{patient.healthAlerts.slice(0, 6).map((alert) => <div className="record-list-row" key={alert.id}><span><strong>{formatEnumLabel(alert.metricType)}</strong><small>{alert.message}</small></span><span className={`badge badge-${alert.severity === "URGENT" ? "cancelled" : "pending"}`}>{formatEnumLabel(alert.severity)}</span></div>)}</RecordList><RecordList title="Appointments" count={patient.appointments.length}>{patient.appointments.slice(0, 6).map((appointment) => <div className="record-list-row" key={appointment.id}><span><strong>{formatDateTime(appointment.appointmentDate)}</strong><small>{appointment.notes || "No notes"}</small></span><span className={`badge badge-${appointment.status.toLowerCase()}`}>{formatEnumLabel(appointment.status)}</span></div>)}</RecordList></div><DoctorPatientHistoryPanel patientId={patient.id} /><PatientMonitoringPanel patientId={patient.id} /><FollowUpPlansPanel patientId={patient.id} /><DoctorCareNotesPanel patientId={patient.id} appointments={patient.appointments} /><DoctorDocumentsPanel patientId={patient.id} /></div>;
 }
 
 function RecordList({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {

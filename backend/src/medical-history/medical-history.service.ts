@@ -1,6 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 
-import { ClinicalAccessService } from '../common/clinical-access/clinical-access.service';
+import {
+  ClinicalAccessService,
+  ClinicalDataPermissions,
+  FULL_CLINICAL_DATA_PERMISSIONS,
+} from '../common/clinical-access/clinical-access.service';
 import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { HealthAuditService } from '../common/health-audit/health-audit.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -29,7 +33,12 @@ export class MedicalHistoryService {
 
   async findForPatient(userId: string, query: MedicalHistoryQueryDto) {
     const patient = await this.access.getPatientForUser(userId);
-    return this.buildTimeline(patient, userId, query);
+    return this.buildTimeline(
+      patient,
+      userId,
+      query,
+      FULL_CLINICAL_DATA_PERMISSIONS,
+    );
   }
 
   async findForDoctor(
@@ -37,11 +46,11 @@ export class MedicalHistoryService {
     patientId: string,
     query: MedicalHistoryQueryDto,
   ) {
-    const { patient } = await this.access.requireAssignedPatient(
+    const { patient, permissions } = await this.access.requireAssignedPatient(
       doctorUserId,
       patientId,
     );
-    return this.buildTimeline(patient, doctorUserId, query);
+    return this.buildTimeline(patient, doctorUserId, query, permissions);
   }
 
   private async buildTimeline(
@@ -51,6 +60,7 @@ export class MedicalHistoryService {
     },
     actorUserId: string,
     query: MedicalHistoryQueryDto,
+    permissions: ClinicalDataPermissions,
   ) {
     const sourceLimit = query.page * query.pageSize;
     if (sourceLimit > 5_000) {
@@ -65,8 +75,26 @@ export class MedicalHistoryService {
     const requested = new Set(
       query.types ?? Object.values(MedicalHistoryEventType),
     );
+    const permitted = (type: MedicalHistoryEventType): boolean => {
+      if (
+        type === MedicalHistoryEventType.MEDICATION ||
+        type === MedicalHistoryEventType.MEDICATION_LOG
+      ) {
+        return permissions.medicationsAllowed;
+      }
+      if (type === MedicalHistoryEventType.MEASUREMENT) {
+        return permissions.measurementsAllowed;
+      }
+      if (
+        type === MedicalHistoryEventType.WEARABLE_METRIC ||
+        type === MedicalHistoryEventType.HEALTH_ALERT
+      ) {
+        return permissions.wearableDataAllowed;
+      }
+      return true;
+    };
     const patientFor = (type: MedicalHistoryEventType) =>
-      requested.has(type) ? patient.id : '__excluded__';
+      requested.has(type) && permitted(type) ? patient.id : '__excluded__';
 
     const [
       medications,
@@ -91,7 +119,7 @@ export class MedicalHistoryService {
           patientId: patientFor(MedicalHistoryEventType.MEDICATION),
           createdAt: range,
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.medicationLog.findMany({
@@ -104,7 +132,7 @@ export class MedicalHistoryService {
         include: {
           medication: { select: { name: true, dosage: true } },
         },
-        orderBy: { scheduledFor: 'desc' },
+        orderBy: [{ scheduledFor: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.measurement.findMany({
@@ -112,7 +140,7 @@ export class MedicalHistoryService {
           patientId: patientFor(MedicalHistoryEventType.MEASUREMENT),
           measuredAt: range,
         },
-        orderBy: { measuredAt: 'desc' },
+        orderBy: [{ measuredAt: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.healthMetric.findMany({
@@ -120,7 +148,7 @@ export class MedicalHistoryService {
           patientId: patientFor(MedicalHistoryEventType.WEARABLE_METRIC),
           measuredAt: range,
         },
-        orderBy: { measuredAt: 'desc' },
+        orderBy: [{ measuredAt: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.healthAlert.findMany({
@@ -128,7 +156,7 @@ export class MedicalHistoryService {
           patientId: patientFor(MedicalHistoryEventType.HEALTH_ALERT),
           detectedAt: range,
         },
-        orderBy: { detectedAt: 'desc' },
+        orderBy: [{ detectedAt: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.appointment.findMany({
@@ -145,7 +173,7 @@ export class MedicalHistoryService {
             },
           },
         },
-        orderBy: { appointmentDate: 'desc' },
+        orderBy: [{ appointmentDate: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.doctorNote.findMany({
@@ -162,7 +190,7 @@ export class MedicalHistoryService {
             },
           },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.patientFollowUp.findMany({
@@ -179,7 +207,7 @@ export class MedicalHistoryService {
             },
           },
         },
-        orderBy: { occurredAt: 'desc' },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'asc' }],
         take: sourceLimit,
       }),
       this.prisma.medication.count({

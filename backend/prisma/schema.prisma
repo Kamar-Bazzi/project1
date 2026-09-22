@@ -144,10 +144,12 @@ enum OneTimeTokenPurpose {
 enum NotificationType {
   MEDICATION_REMINDER
   MEDICATION_OVERDUE
+  MEDICATION_REFILL_LOW
   APPOINTMENT_REMINDER
   HEALTH_ALERT
   EMERGENCY_ALERT
   SECURITY_ALERT
+  WEARABLE_SYNC_STALE
   SYSTEM
 }
 
@@ -155,6 +157,7 @@ enum NotificationChannelType {
   IN_APP
   EMAIL
   PUSH
+  SMS
 }
 
 enum NotificationDeliveryStatus {
@@ -165,29 +168,111 @@ enum NotificationDeliveryStatus {
   SKIPPED
 }
 
-model User {
-  id                String        @id @default(uuid())
-  name              String
-  email             String        @unique
-  passwordHash      String
-  role              UserRole      @default(PATIENT)
-  accountStatus     AccountStatus @default(ACTIVE)
-  emailVerifiedAt   DateTime?
-  passwordChangedAt DateTime?
+enum TwoFactorMethod {
+  EMAIL_OTP
+  AUTHENTICATOR
+}
 
-  patient                Patient?
-  doctor                 Doctor?
-  auditLogs              AuditLog[]
-  authSessions           AuthSession[]
-  oneTimeTokens          OneTimeToken[]
-  notifications          Notification[]
-  pushSubscriptions      PushSubscription[]
-  notificationPreference NotificationPreference?
+enum TwoFactorChallengePurpose {
+  LOGIN
+  AUTHENTICATOR_SETUP
+}
+
+enum WearableSyncStatus {
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum CheckInMedicationAdherence {
+  ALL_TAKEN
+  SOME_MISSED
+  NONE_TAKEN
+  NOT_APPLICABLE
+}
+
+enum FollowUpPlanStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum FollowUpTaskStatus {
+  TODO
+  DONE
+  CANCELLED
+}
+
+enum HealthDocumentCategory {
+  PRESCRIPTION
+  LABORATORY_REPORT
+  MEDICAL_REPORT
+  OTHER
+}
+
+enum AccountDeletionStatus {
+  PENDING
+  PROCESSING
+  CANCELLED
+  COMPLETED
+}
+
+enum PatientDataExportFormat {
+  CSV
+  JSON
+  PDF
+}
+
+enum PatientDataExportDataset {
+  ALL
+  MEDICATIONS
+  MEASUREMENTS
+  APPOINTMENTS
+  WEARABLE_DATA
+  ALERTS
+}
+
+enum PatientDataExportRequestStatus {
+  READY
+  REVOKED
+  EXPIRED
+}
+
+model User {
+  id                       String           @id @default(uuid())
+  name                     String
+  email                    String           @unique
+  passwordHash             String
+  role                     UserRole         @default(PATIENT)
+  accountStatus            AccountStatus    @default(ACTIVE)
+  emailVerifiedAt          DateTime?
+  passwordChangedAt        DateTime?
+  twoFactorMethod          TwoFactorMethod?
+  twoFactorSecretEncrypted String?
+  twoFactorEnabledAt       DateTime?
+  failedLoginAttempts      Int              @default(0)
+  lastFailedLoginAt        DateTime?
+  lockedUntil              DateTime?
+
+  patient                 Patient?
+  doctor                  Doctor?
+  auditLogs               AuditLog[]
+  authSessions            AuthSession[]
+  oneTimeTokens           OneTimeToken[]
+  notifications           Notification[]
+  pushSubscriptions       PushSubscription[]
+  notificationPreference  NotificationPreference?
+  notificationRoutes      NotificationRoutePreference[]
+  twoFactorChallenges     TwoFactorChallenge[]
+  uploadedHealthDocuments HealthDocument[]              @relation("UploadedHealthDocuments")
+  accountDeletionRequest  AccountDeletionRequest?
+  dataExportRequests      PatientDataExportRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([role, accountStatus])
+  @@index([lockedUntil])
 }
 
 model Patient {
@@ -198,54 +283,72 @@ model Patient {
   emergencyContact String?
   timeZone         String?
 
-  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  medications        Medication[]
-  measurements       Measurement[]
-  appointments       Appointment[]
-  wearableDevices    WearableDevice[]
-  healthMetrics      HealthMetric[]
-  emergencyContacts  EmergencyContact[]
-  healthAlerts       HealthAlert[]
-  alertRules         AlertRule[]
-  doctorAccessGrants DoctorPatientAccess[]
-  doctorNotes        DoctorNote[]
-  followUps          PatientFollowUp[]
-  healthGoals        HealthGoal[]
-  emergencyEvents    EmergencyEvent[]
+  user                          User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medications                   Medication[]
+  measurements                  Measurement[]
+  appointments                  Appointment[]
+  wearableDevices               WearableDevice[]
+  healthMetrics                 HealthMetric[]
+  emergencyContacts             EmergencyContact[]
+  healthAlerts                  HealthAlert[]
+  alertRules                    AlertRule[]
+  doctorAccessGrants            DoctorPatientAccess[]
+  doctorNotes                   DoctorNote[]
+  followUps                     PatientFollowUp[]
+  healthGoals                   HealthGoal[]
+  emergencyEvents               EmergencyEvent[]
+  symptomEntries                SymptomEntry[]
+  dailyCheckIns                 DailyCheckIn[]
+  followUpPlans                 FollowUpPlan[]
+  healthDocuments               HealthDocument[]
+  wearableSyncRuns              WearableSyncRun[]
+  emergencyContactNotifications EmergencyContactNotification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Doctor {
-  id             String  @id @default(uuid())
-  userId         String  @unique
-  specialization String?
-  licenseNumber  String? @unique
+  id                  String  @id @default(uuid())
+  userId              String  @unique
+  specialization      String?
+  licenseNumber       String? @unique
+  timeZone            String  @default("UTC")
+  slotDurationMinutes Int     @default(30)
 
   user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments        Appointment[]
   patientAccessGrants DoctorPatientAccess[]
   doctorNotes         DoctorNote[]
   followUps           PatientFollowUp[]
+  followUpPlans       FollowUpPlan[]
+  availabilityWindows DoctorAvailability[]
+  healthAlertReviews  HealthAlertReview[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Medication {
-  id           String           @id @default(uuid())
-  patientId    String
-  name         String
-  dosage       String
-  instructions String?
-  startDate    DateTime
-  endDate      DateTime?
-  status       MedicationStatus @default(ACTIVE)
+  id                   String           @id @default(uuid())
+  patientId            String
+  name                 String
+  dosage               String
+  instructions         String?
+  startDate            DateTime
+  endDate              DateTime?
+  status               MedicationStatus @default(ACTIVE)
+  remainingQuantity    Float?
+  quantityUnit         String?
+  lowQuantityThreshold Float?
+  nextRefillDate       DateTime?        @db.Date
+  pharmacyName         String?
 
-  patient   Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  schedules MedicationSchedule[]
-  logs      MedicationLog[]
+  patient       Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  schedules     MedicationSchedule[]
+  logs          MedicationLog[]
+  symptomLinks  SymptomMedication[]
+  notifications Notification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -299,7 +402,8 @@ model Measurement {
   unit           String
   measuredAt     DateTime
 
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient      Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  symptomLinks SymptomMeasurement[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -308,17 +412,20 @@ model Measurement {
 }
 
 model WearableDevice {
-  id               String           @id @default(uuid())
-  patientId        String
-  provider         WearableProvider
-  deviceName       String
-  externalDeviceId String?
-  connectedAt      DateTime         @default(now())
-  lastSyncAt       DateTime?
-  active           Boolean          @default(true)
+  id                      String           @id @default(uuid())
+  patientId               String
+  provider                WearableProvider
+  deviceName              String
+  externalDeviceId        String?
+  connectedAt             DateTime         @default(now())
+  lastSyncAt              DateTime?
+  active                  Boolean          @default(true)
+  syncWarningAfterHours   Int              @default(24)
+  staleNotificationSentAt DateTime?
 
-  patient       Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient       Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
   healthMetrics HealthMetric[]
+  syncRuns      WearableSyncRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -366,7 +473,8 @@ model EmergencyContact {
   email        String?
   active       Boolean @default(true)
 
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient       Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  notifications EmergencyContactNotification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -383,6 +491,9 @@ model AlertRule {
   minimumValue                Float?
   maximumValue                Float?
   consecutiveReadingsRequired Int                 @default(3)
+  warningReadingsRequired     Int                 @default(5)
+  urgentReadingsRequired      Int                 @default(7)
+  evaluationWindowMinutes     Int                 @default(60)
   severity                    HealthAlertSeverity @default(WARNING)
   notifyEmergencyContacts     Boolean             @default(false)
 
@@ -398,22 +509,27 @@ model AlertRule {
 }
 
 model HealthAlert {
-  id             String              @id @default(uuid())
-  patientId      String
-  metricType     HealthMetricType
-  severity       HealthAlertSeverity
-  message        String
-  metricId       String?
-  alertRuleId    String?
-  status         HealthAlertStatus   @default(ACTIVE)
-  detectedAt     DateTime            @default(now())
-  acknowledgedAt DateTime?
-  resolvedAt     DateTime?
+  id                   String              @id @default(uuid())
+  patientId            String
+  metricType           HealthMetricType
+  severity             HealthAlertSeverity
+  message              String
+  metricId             String?
+  alertRuleId          String?
+  status               HealthAlertStatus   @default(ACTIVE)
+  detectedAt           DateTime            @default(now())
+  acknowledgedAt       DateTime?
+  resolvedAt           DateTime?
+  abnormalReadingCount Int                 @default(0)
+  lastEscalatedAt      DateTime?
 
-  patient       Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  metric        HealthMetric?  @relation(fields: [metricId], references: [id], onDelete: SetNull)
-  alertRule     AlertRule?     @relation(fields: [alertRuleId], references: [id], onDelete: SetNull)
-  notifications Notification[]
+  patient                       Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  metric                        HealthMetric?                  @relation(fields: [metricId], references: [id], onDelete: SetNull)
+  alertRule                     AlertRule?                     @relation(fields: [alertRuleId], references: [id], onDelete: SetNull)
+  notifications                 Notification[]
+  transitions                   HealthAlertTransition[]
+  reviews                       HealthAlertReview[]
+  emergencyContactNotifications EmergencyContactNotification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -427,12 +543,16 @@ model HealthAlert {
 }
 
 model DoctorPatientAccess {
-  id        String    @id @default(uuid())
-  doctorId  String
-  patientId String
-  active    Boolean   @default(true)
-  grantedAt DateTime  @default(now())
-  revokedAt DateTime?
+  id                  String    @id @default(uuid())
+  doctorId            String
+  patientId           String
+  active              Boolean   @default(true)
+  grantedAt           DateTime  @default(now())
+  revokedAt           DateTime?
+  medicationsAllowed  Boolean   @default(true)
+  measurementsAllowed Boolean   @default(true)
+  wearableDataAllowed Boolean   @default(true)
+  documentsAllowed    Boolean   @default(true)
 
   doctor  Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -450,6 +570,8 @@ model Appointment {
   patientId       String
   doctorId        String
   appointmentDate DateTime
+  appointmentEnd  DateTime
+  durationMinutes Int               @default(30)
   status          AppointmentStatus @default(SCHEDULED)
   notes           String?
 
@@ -466,6 +588,100 @@ model Appointment {
   @@index([doctorId])
   @@index([patientId, status, appointmentDate])
   @@index([doctorId, status, appointmentDate])
+}
+
+model DoctorAvailability {
+  id          String @id @default(uuid())
+  doctorId    String
+  dayOfWeek   Int
+  startMinute Int
+  endMinute   Int
+
+  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([doctorId, dayOfWeek, startMinute, endMinute])
+  @@index([doctorId, dayOfWeek])
+}
+
+model WearableSyncRun {
+  id               String             @id @default(uuid())
+  patientId        String
+  wearableDeviceId String
+  provider         WearableProvider
+  status           WearableSyncStatus @default(SUCCESS)
+  receivedCount    Int                @default(0)
+  importedCount    Int                @default(0)
+  duplicateCount   Int                @default(0)
+  rejectedCount    Int                @default(0)
+  errorCount       Int                @default(0)
+  errors           Json?
+  startedAt        DateTime           @default(now())
+  completedAt      DateTime?
+
+  patient        Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  wearableDevice WearableDevice @relation(fields: [wearableDeviceId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, startedAt])
+  @@index([wearableDeviceId, startedAt])
+}
+
+model HealthAlertTransition {
+  id                   String               @id @default(uuid())
+  healthAlertId        String
+  fromSeverity         HealthAlertSeverity?
+  toSeverity           HealthAlertSeverity
+  abnormalReadingCount Int
+  reason               String
+  occurredAt           DateTime             @default(now())
+
+  healthAlert HealthAlert @relation(fields: [healthAlertId], references: [id], onDelete: Cascade)
+
+  @@index([healthAlertId, occurredAt])
+}
+
+model HealthAlertReview {
+  id            String   @id @default(uuid())
+  healthAlertId String
+  doctorId      String
+  note          String
+  reviewedAt    DateTime @default(now())
+
+  healthAlert HealthAlert @relation(fields: [healthAlertId], references: [id], onDelete: Cascade)
+  doctor      Doctor      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@unique([healthAlertId, doctorId])
+  @@index([doctorId, reviewedAt])
+}
+
+model EmergencyContactNotification {
+  id                 String                     @id @default(uuid())
+  patientId          String
+  emergencyContactId String?
+  healthAlertId      String?
+  emergencyEventId   String?
+  reason             String
+  recipientName      String
+  recipientAddress   String
+  channel            NotificationChannelType
+  status             NotificationDeliveryStatus @default(PENDING)
+  providerMessageId  String?
+  errorCode          String?
+  notifiedAt         DateTime                   @default(now())
+
+  patient          Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  emergencyContact EmergencyContact? @relation(fields: [emergencyContactId], references: [id], onDelete: SetNull)
+  healthAlert      HealthAlert?      @relation(fields: [healthAlertId], references: [id], onDelete: SetNull)
+  emergencyEvent   EmergencyEvent?   @relation(fields: [emergencyEventId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, notifiedAt])
+  @@index([healthAlertId])
+  @@index([emergencyEventId])
 }
 
 model DoctorNote {
@@ -508,6 +724,133 @@ model PatientFollowUp {
   @@index([patientId, occurredAt])
   @@index([doctorId, patientId, occurredAt])
   @@index([appointmentId])
+}
+
+model FollowUpPlan {
+  id           String             @id @default(uuid())
+  patientId    String
+  doctorId     String
+  title        String
+  notes        String?
+  nextReviewAt DateTime?
+  status       FollowUpPlanStatus @default(ACTIVE)
+
+  patient Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  Doctor         @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  tasks   FollowUpTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, status, nextReviewAt])
+  @@index([doctorId, patientId, status])
+}
+
+model FollowUpTask {
+  id             String             @id @default(uuid())
+  followUpPlanId String
+  title          String
+  notes          String?
+  dueAt          DateTime?
+  status         FollowUpTaskStatus @default(TODO)
+  completedAt    DateTime?
+
+  followUpPlan FollowUpPlan @relation(fields: [followUpPlanId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([followUpPlanId, status, dueAt])
+}
+
+model SymptomEntry {
+  id         String   @id @default(uuid())
+  patientId  String
+  name       String
+  severity   Int
+  occurredAt DateTime
+  notes      String?
+
+  patient      Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medications  SymptomMedication[]
+  measurements SymptomMeasurement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, occurredAt])
+  @@index([patientId, severity])
+}
+
+model SymptomMedication {
+  symptomId    String
+  medicationId String
+
+  symptom    SymptomEntry @relation(fields: [symptomId], references: [id], onDelete: Cascade)
+  medication Medication   @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+
+  @@id([symptomId, medicationId])
+  @@index([medicationId])
+}
+
+model SymptomMeasurement {
+  symptomId     String
+  measurementId String
+
+  symptom     SymptomEntry @relation(fields: [symptomId], references: [id], onDelete: Cascade)
+  measurement Measurement  @relation(fields: [measurementId], references: [id], onDelete: Cascade)
+
+  @@id([symptomId, measurementId])
+  @@index([measurementId])
+}
+
+model DailyCheckIn {
+  id                  String                     @id @default(uuid())
+  patientId           String
+  localDate           DateTime                   @db.Date
+  timeZone            String
+  mood                Int
+  painLevel           Int
+  sleepQuality        Int
+  symptoms            String[]                   @default([])
+  notes               String?
+  activityMinutes     Int
+  medicationAdherence CheckInMedicationAdherence
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([patientId, localDate])
+  @@index([patientId, localDate])
+}
+
+model HealthDocument {
+  id                String                 @id @default(uuid())
+  patientId         String
+  uploadedByUserId  String
+  title             String
+  category          HealthDocumentCategory
+  description       String?
+  documentDate      DateTime?              @db.Date
+  originalFileName  String
+  storageKey        String                 @unique
+  contentType       String
+  sizeBytes         Int
+  sha256            String
+  deletionPendingAt DateTime?
+
+  patient    Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation("UploadedHealthDocuments", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, createdAt])
+  @@index([uploadedByUserId])
+  @@index([patientId, category])
+  @@index([deletionPendingAt])
 }
 
 model HealthGoal {
@@ -559,7 +902,8 @@ model EmergencyEvent {
   triggeredAt DateTime             @default(now())
   resolvedAt  DateTime?
 
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient              Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  contactNotifications EmergencyContactNotification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -582,19 +926,22 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([userId])
+  @@index([createdAt])
   @@index([action, createdAt])
   @@index([ipAddress, createdAt])
 }
 
 model AuthSession {
-  id          String    @id @default(uuid())
-  userId      String
-  tokenHash   String
-  expiresAt   DateTime
-  lastUsedAt  DateTime  @default(now())
-  revokedAt   DateTime?
-  createdByIp String?
-  userAgent   String?
+  id                 String    @id @default(uuid())
+  userId             String
+  tokenHash          String
+  expiresAt          DateTime
+  lastUsedAt         DateTime  @default(now())
+  revokedAt          DateTime?
+  createdByIp        String?
+  userAgent          String?
+  deviceFingerprint  String?
+  networkFingerprint String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -602,6 +949,28 @@ model AuthSession {
   updatedAt DateTime @updatedAt
 
   @@index([userId, revokedAt])
+  @@index([userId, deviceFingerprint])
+  @@index([userId, networkFingerprint])
+  @@index([expiresAt])
+}
+
+model TwoFactorChallenge {
+  id                     String                    @id @default(uuid())
+  userId                 String
+  purpose                TwoFactorChallengePurpose
+  method                 TwoFactorMethod
+  codeHash               String?
+  pendingSecretEncrypted String?
+  expiresAt              DateTime
+  attempts               Int                       @default(0)
+  maxAttempts            Int                       @default(5)
+  consumedAt             DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, purpose, consumedAt])
   @@index([expiresAt])
 }
 
@@ -631,21 +1000,25 @@ model Notification {
   medicationLogId  String?
   healthAlertId    String?
   appointmentId    String?
+  medicationId     String?
   readAt           DateTime?
 
   user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   medicationLog MedicationLog?         @relation(fields: [medicationLogId], references: [id], onDelete: Cascade)
   healthAlert   HealthAlert?           @relation(fields: [healthAlertId], references: [id], onDelete: Cascade)
   appointment   Appointment?           @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  medication    Medication?            @relation(fields: [medicationId], references: [id], onDelete: SetNull)
   deliveries    NotificationDelivery[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, readAt, createdAt])
+  @@index([createdAt])
   @@index([medicationLogId])
   @@index([healthAlertId])
   @@index([appointmentId])
+  @@index([medicationId])
 }
 
 model NotificationPreference {
@@ -654,6 +1027,7 @@ model NotificationPreference {
   inAppEnabled             Boolean @default(true)
   emailEnabled             Boolean @default(true)
   pushEnabled              Boolean @default(true)
+  smsEnabled               Boolean @default(false)
   medicationReminders      Boolean @default(true)
   appointmentReminders     Boolean @default(true)
   healthAlerts             Boolean @default(true)
@@ -665,6 +1039,22 @@ model NotificationPreference {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model NotificationRoutePreference {
+  id      String                  @id @default(uuid())
+  userId  String
+  type    NotificationType
+  channel NotificationChannelType
+  enabled Boolean                 @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, type, channel])
+  @@index([userId, type])
 }
 
 model NotificationDelivery {
@@ -702,4 +1092,46 @@ model PushSubscription {
   updatedAt DateTime @updatedAt
 
   @@index([userId, revokedAt])
+}
+
+model AccountDeletionRequest {
+  id                  String                @id @default(uuid())
+  userId              String?               @unique
+  status              AccountDeletionStatus @default(PENDING)
+  requestedAt         DateTime              @default(now())
+  scheduledFor        DateTime
+  cancelledAt         DateTime?
+  processingStartedAt DateTime?
+  completedAt         DateTime?
+  attempts            Int                   @default(0)
+  lastAttemptAt       DateTime?
+  lastErrorCode       String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scheduledFor])
+  @@index([status, processingStartedAt])
+}
+
+model PatientDataExportRequest {
+  id           String                         @id @default(uuid())
+  userId       String
+  format       PatientDataExportFormat
+  dataset      PatientDataExportDataset
+  status       PatientDataExportRequestStatus @default(READY)
+  from         DateTime?
+  to           DateTime?
+  expiresAt    DateTime
+  downloadedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status, createdAt])
+  @@index([status, expiresAt])
 }

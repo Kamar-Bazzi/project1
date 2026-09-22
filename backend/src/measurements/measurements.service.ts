@@ -5,8 +5,10 @@ import {
 } from '@nestjs/common';
 import { Measurement, MeasurementType, Prisma } from '@prisma/client';
 
+import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMeasurementDto } from './dto/create-measurement.dto';
+import { MeasurementQueryDto } from './dto/measurement-query.dto';
 import { UpdateMeasurementDto } from './dto/update-measurement.dto';
 
 const CANONICAL_MEASUREMENT_UNITS: Record<MeasurementType, string> = {
@@ -52,6 +54,62 @@ export class MeasurementsService {
       { operation: 'LIST', resultCount: measurements.length },
     );
     return measurements;
+  }
+
+  async findPageForPatient(userId: string, query: MeasurementQueryDto) {
+    const patientId = await this.getPatientId(userId);
+    const from = query.from ? new Date(query.from) : undefined;
+    const to = query.to ? new Date(query.to) : undefined;
+
+    if (from && to && from > to) {
+      throw new BadRequestException('from must be before or equal to to');
+    }
+
+    const where: Prisma.MeasurementWhereInput = {
+      patientId,
+      type: query.type,
+      measuredAt:
+        from || to
+          ? {
+              gte: from,
+              lte: to,
+            }
+          : undefined,
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.measurement.findMany({
+        where,
+        orderBy: [
+          { measuredAt: 'desc' },
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.measurement.count({ where }),
+    ]);
+
+    await this.recordAudit(
+      this.prisma,
+      userId,
+      'MEDICAL_RECORD_ACCESSED',
+      'Measurement',
+      undefined,
+      patientId,
+      {
+        operation: 'PAGINATED_LIST',
+        resultCount: items.length,
+        page: query.page,
+        type: query.type ?? null,
+      },
+    );
+
+    return {
+      items,
+      pagination: paginationMetadata(query.page, query.pageSize, total),
+    };
   }
 
   async findOneForPatient(

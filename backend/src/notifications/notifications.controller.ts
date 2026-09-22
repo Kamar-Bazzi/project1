@@ -47,6 +47,8 @@ export class NotificationsController {
       request.user.id,
       query.unreadOnly,
       query.limit,
+      query.page,
+      query.type,
     );
   }
 

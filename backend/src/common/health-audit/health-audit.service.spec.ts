@@ -21,6 +21,8 @@ describe('HealthAuditService', () => {
         patientId: 'patient-1',
         metricType: 'HEART_RATE',
         count: 2,
+        severity: 10,
+        alertSeverity: 'WARNING',
         value: 188,
         phone: '+1 555 0100',
         email: 'private@example.com',
@@ -40,6 +42,7 @@ describe('HealthAuditService', () => {
           patientId: 'patient-1',
           metricType: 'HEART_RATE',
           count: 2,
+          alertSeverity: 'WARNING',
         },
       },
     });

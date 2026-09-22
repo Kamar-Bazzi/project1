@@ -15,6 +15,7 @@ export type MedicationStatus = (typeof medicationStatuses)[number];
 export type MedicationLogStatus =
   (typeof medicationLogStatuses)[number];
 export type MedicationScheduleFrequency = "DAILY";
+export type MedicationRefillStatus = "NOT_TRACKED" | "OK" | "LOW";
 
 export interface MedicationSchedule {
   id: string;
@@ -46,6 +47,13 @@ export interface Medication {
   startDate: string;
   endDate: string | null;
   status: MedicationStatus;
+  remainingQuantity?: number | null;
+  quantityUnit?: string | null;
+  lowQuantityThreshold?: number | null;
+  nextRefillDate?: string | null;
+  pharmacyName?: string | null;
+  refillStatus?: MedicationRefillStatus;
+  lowSupplyWarning?: string | null;
   schedules: MedicationSchedule[];
   logs: MedicationLog[];
   createdAt?: string;
@@ -71,12 +79,62 @@ export type UpdateMedicationInput = Partial<MedicationInput> & {
   status?: MedicationStatus;
 };
 
+export interface MedicationRefillInput {
+  remainingQuantity: number | null;
+  quantityUnit?: string | null;
+  lowQuantityThreshold?: number | null;
+  nextRefillDate?: string | null;
+  pharmacyName?: string | null;
+}
+
+export interface MedicationInteractionSource {
+  id: string;
+  name?: string;
+  title?: string;
+  url?: string | null;
+}
+
+export interface MedicationInteractionWarning {
+  medications: Array<{
+    id: string;
+    name: string;
+    canonicalId: string;
+  }>;
+  summary: string;
+  reviewRecommendation: string;
+  sourceIds: string[];
+}
+
+export interface MedicationInteractionReview {
+  checkedAt: string;
+  reference: {
+    name: string;
+    version: string;
+    publishedAt: string;
+    sources: MedicationInteractionSource[];
+  };
+  warnings: MedicationInteractionWarning[];
+  unmatchedMedications: Array<{ id: string; name: string }>;
+  disclaimer: string;
+}
+
 export function formatEnumLabel(value: string): string {
   return value
     .toLowerCase()
     .split("_")
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+export function isMedicationLowSupply(medication: Medication): boolean {
+  if (medication.refillStatus) return medication.refillStatus === "LOW";
+  return (
+    medication.remainingQuantity !== null &&
+    medication.remainingQuantity !== undefined &&
+    medication.lowQuantityThreshold !== null &&
+    medication.lowQuantityThreshold !== undefined &&
+    medication.remainingQuantity <= medication.lowQuantityThreshold
+  );
 }
 
 export function getPrimarySchedule(

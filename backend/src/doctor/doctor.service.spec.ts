@@ -1,12 +1,15 @@
 import { NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { ClinicalAccessService } from '../common/clinical-access/clinical-access.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DoctorService } from './doctor.service';
 
 describe('DoctorService assignment authorization', () => {
   it('requires an active assignment when reading a patient record', async () => {
-    const patientFindFirst = jest.fn().mockResolvedValue(null);
+    const requireAssignedPatient = jest
+      .fn()
+      .mockRejectedValue(new NotFoundException('Assigned patient not found'));
     const prisma = {
       doctor: {
         findUnique: jest.fn().mockResolvedValue({
@@ -23,22 +26,17 @@ describe('DoctorService assignment authorization', () => {
           },
         }),
       },
-      patient: { findFirst: patientFindFirst },
     } as unknown as PrismaService;
-    const service = new DoctorService(prisma);
+    const service = new DoctorService(prisma, {
+      requireAssignedPatient,
+    } as unknown as ClinicalAccessService);
 
     await expect(
       service.findPatient('doctor-user', 'patient-id'),
     ).rejects.toEqual(new NotFoundException('Assigned patient not found'));
-    expect(patientFindFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          id: 'patient-id',
-          doctorAccessGrants: {
-            some: { doctorId: 'doctor-id', active: true },
-          },
-        },
-      }),
+    expect(requireAssignedPatient).toHaveBeenCalledWith(
+      'doctor-user',
+      'patient-id',
     );
   });
 
@@ -65,7 +63,7 @@ describe('DoctorService assignment authorization', () => {
         Promise.all(operations),
       ),
     } as unknown as PrismaService;
-    const service = new DoctorService(prisma);
+    const service = new DoctorService(prisma, {} as ClinicalAccessService);
 
     await service.findAlerts('doctor-user', { page: 1, pageSize: 20 });
 
@@ -74,8 +72,57 @@ describe('DoctorService assignment authorization', () => {
     };
     expect(arguments_.where?.patient).toEqual({
       doctorAccessGrants: {
-        some: { doctorId: 'doctor-id', active: true },
+        some: {
+          doctorId: 'doctor-id',
+          active: true,
+          wearableDataAllowed: true,
+        },
       },
     });
+  });
+
+  it('combines patient search with the current doctor active assignment', async () => {
+    const patientFindMany = jest.fn().mockResolvedValue([]);
+    const patientCount = jest.fn().mockResolvedValue(0);
+    const prisma = {
+      doctor: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'doctor-id',
+          userId: 'doctor-user',
+          user: {
+            id: 'doctor-user',
+            name: 'Doctor',
+            email: 'doctor@example.com',
+          },
+        }),
+      },
+      patient: { findMany: patientFindMany, count: patientCount },
+      $transaction: jest.fn((operations: Promise<unknown>[]) =>
+        Promise.all(operations),
+      ),
+    } as unknown as PrismaService;
+    const service = new DoctorService(prisma, {} as ClinicalAccessService);
+
+    await service.findPatients('doctor-user', {
+      page: 1,
+      pageSize: 20,
+      search: 'alex',
+    });
+
+    expect(patientFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          doctorAccessGrants: {
+            some: { doctorId: 'doctor-id', active: true },
+          },
+          user: {
+            OR: [
+              { name: { contains: 'alex', mode: 'insensitive' } },
+              { email: { contains: 'alex', mode: 'insensitive' } },
+            ],
+          },
+        },
+      }),
+    );
   });
 });

@@ -6,6 +6,7 @@ dist/
 .env.production.local
 backend/.env
 frontend/.env.local
+backend/storage/
 
 # Production TLS material and database backups
 deploy/certs/*.pem

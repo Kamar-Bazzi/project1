@@ -3,16 +3,19 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, WearableDevice, WearableProvider } from '@prisma/client';
+import { Prisma, WearableDevice } from '@prisma/client';
 
 import { HealthAuditService } from '../common/health-audit/health-audit.service';
+import { paginationMetadata } from '../common/dto/pagination-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWearableDto } from './dto/create-wearable.dto';
 import { UpdateWearableDto } from './dto/update-wearable.dto';
+import { WearableSyncHistoryQueryDto } from './dto/wearable-sync-history-query.dto';
 import { WearableProviderRegistry } from './providers/wearable-provider.registry';
-
-const DEMO_EXTERNAL_DEVICE_ID = 'demo-watch';
-const DEFAULT_DEMO_DEVICE_NAME = 'Demo Watch';
+import {
+  WearableProviderError,
+  WearableProviderErrorCode,
+} from './providers/wearable-provider.interface';
 
 const wearableDeviceResponseSelect = {
   id: true,
@@ -22,6 +25,8 @@ const wearableDeviceResponseSelect = {
   connectedAt: true,
   lastSyncAt: true,
   active: true,
+  syncWarningAfterHours: true,
+  staleNotificationSentAt: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.WearableDeviceSelect;
@@ -86,39 +91,95 @@ export class WearablesService {
     return device;
   }
 
+  async findSyncHistoryForPatient(
+    userId: string,
+    query: WearableSyncHistoryQueryDto,
+  ) {
+    const patientId = await this.getPatientId(userId);
+    const where: Prisma.WearableSyncRunWhereInput = {
+      patientId,
+      wearableDeviceId: query.wearableDeviceId,
+      status: query.status,
+    };
+    const skip = (query.page - 1) * query.pageSize;
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.wearableSyncRun.findMany({
+        where,
+        select: {
+          id: true,
+          wearableDeviceId: true,
+          provider: true,
+          status: true,
+          receivedCount: true,
+          importedCount: true,
+          duplicateCount: true,
+          rejectedCount: true,
+          errorCount: true,
+          errors: true,
+          startedAt: true,
+          completedAt: true,
+          wearableDevice: { select: { deviceName: true } },
+        },
+        orderBy: [{ startedAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take: query.pageSize,
+      }),
+      this.prisma.wearableSyncRun.count({ where }),
+    ]);
+
+    await this.healthAudit.record({
+      userId,
+      action: 'WEARABLE_SYNC_HISTORY_ACCESSED',
+      entity: 'WearableSyncRun',
+      metadata: { count: items.length, resultCount: total },
+    });
+
+    return {
+      items,
+      pagination: paginationMetadata(query.page, query.pageSize, total),
+    };
+  }
+
   async createForPatient(
     userId: string,
     createDto: CreateWearableDto,
   ): Promise<WearableDeviceResponse> {
     const provider = this.providerRegistry.get(createDto.provider);
 
-    if (createDto.provider !== WearableProvider.MOCK || !provider) {
-      throw new BadRequestException(
-        'This wearable provider is not available in the web demo. HealthKit and Health Connect require a companion mobile app; other providers require a supported provider API integration.',
-      );
+    if (!provider) {
+      throw new BadRequestException('Unsupported wearable provider.');
+    }
+
+    if (!provider.supportsConnection) {
+      throw new BadRequestException(provider.unavailableMessage);
     }
 
     const patientId = await this.getPatientId(userId);
+    const connection = await provider.connect({
+      userId,
+      patientId,
+      deviceName: createDto.deviceName,
+    });
     const updateData: Prisma.WearableDeviceUpdateInput = { active: true };
 
     if (createDto.deviceName !== undefined) {
-      updateData.deviceName = createDto.deviceName;
+      updateData.deviceName = connection.deviceName;
     }
 
     const device = await this.prisma.wearableDevice.upsert({
       where: {
         patientId_provider_externalDeviceId: {
           patientId,
-          provider: WearableProvider.MOCK,
-          externalDeviceId: DEMO_EXTERNAL_DEVICE_ID,
+          provider: connection.provider,
+          externalDeviceId: connection.externalDeviceId,
         },
       },
       update: updateData,
       create: {
         patientId,
-        provider: WearableProvider.MOCK,
-        deviceName: createDto.deviceName ?? DEFAULT_DEMO_DEVICE_NAME,
-        externalDeviceId: DEMO_EXTERNAL_DEVICE_ID,
+        provider: connection.provider,
+        deviceName: connection.deviceName,
+        externalDeviceId: connection.externalDeviceId,
       },
       select: wearableDeviceResponseSelect,
     });
@@ -151,6 +212,10 @@ export class WearablesService {
     if (updateDto.active !== undefined) {
       data.active = updateDto.active;
     }
+    if (updateDto.syncWarningAfterHours !== undefined) {
+      data.syncWarningAfterHours = updateDto.syncWarningAfterHours;
+      data.staleNotificationSentAt = null;
+    }
 
     const device = await this.prisma.wearableDevice.update({
       where: { id: deviceId, patientId },
@@ -172,6 +237,22 @@ export class WearablesService {
   async disconnectForPatient(userId: string, deviceId: string): Promise<void> {
     const patientId = await this.getPatientId(userId);
     const device = await this.requireOwnedDeviceForPatient(patientId, deviceId);
+    const provider = this.providerRegistry.get(device.provider);
+
+    try {
+      await provider?.disconnect(device, { userId, patientId });
+    } catch (error) {
+      const providerError =
+        provider?.handleProviderError(error) ??
+        new WearableProviderError(
+          WearableProviderErrorCode.DISCONNECT_FAILED,
+          'Wearable provider disconnect failed.',
+          true,
+          error,
+        );
+
+      throw new BadRequestException(providerError.message);
+    }
 
     await this.prisma.wearableDevice.update({
       where: { id: deviceId, patientId },

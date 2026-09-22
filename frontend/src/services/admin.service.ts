@@ -4,6 +4,7 @@ import type {
   AdminUser,
   AdminUserFilters,
   AuditLog,
+  AuditLogFilters,
   CreateAdminUserInput,
   DoctorPatientAssignment,
   PaginatedResponse,
@@ -87,21 +88,26 @@ export const adminService = {
     return response.data;
   },
 
-  async revokeAssignment(
-    doctorId: string,
-    patientId: string,
-  ): Promise<void> {
+  async revokeAssignment(doctorId: string, patientId: string): Promise<void> {
     await api.delete(`/admin/assignments/${doctorId}/${patientId}`);
   },
 
   async listAuditLogs(
-    page = 1,
-    pageSize = 50,
-    action?: string,
+    filtersOrPage: AuditLogFilters | number = {},
+    legacyPageSize = 50,
+    legacyAction?: string,
   ): Promise<PaginatedResponse<AuditLog>> {
+    const filters: AuditLogFilters =
+      typeof filtersOrPage === "number"
+        ? {
+            page: filtersOrPage,
+            pageSize: legacyPageSize,
+            action: legacyAction,
+          }
+        : { page: 1, pageSize: 50, ...filtersOrPage };
     const response = await api.get<PaginatedResponse<AuditLog>>(
       "/admin/audit-logs",
-      { params: { page, pageSize, action: action || undefined } },
+      { params: filters },
     );
     return response.data;
   },

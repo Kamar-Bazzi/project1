@@ -1,0 +1,175 @@
+ M .env.production.example
+ M .gitignore
+ M README.md
+ M backend/Dockerfile
+ M backend/package-lock.json
+ M backend/package.json
+ M backend/prisma/schema.prisma
+ M backend/scripts/verify-production-env.mjs
+ M backend/src/admin/admin.controller.ts
+ M backend/src/admin/admin.module.ts
+ M backend/src/admin/admin.service.spec.ts
+ M backend/src/admin/admin.service.ts
+ M backend/src/app.module.ts
+ M backend/src/appointments/appointments.controller.ts
+ M backend/src/appointments/appointments.module.ts
+ M backend/src/appointments/appointments.service.spec.ts
+ M backend/src/appointments/appointments.service.ts
+ M backend/src/appointments/dto/create-appointment.dto.ts
+ M backend/src/appointments/dto/update-appointment.dto.ts
+ M backend/src/auth/auth.controller.ts
+ M backend/src/auth/auth.service.ts
+ M backend/src/common/clinical-access/clinical-access.service.ts
+ M backend/src/common/health-audit/health-audit.service.spec.ts
+ M backend/src/common/health-audit/health-audit.service.ts
+ M backend/src/common/time-zone/local-day.ts
+ M backend/src/configure-app.ts
+ M backend/src/doctor/doctor.module.ts
+ M backend/src/doctor/doctor.service.spec.ts
+ M backend/src/doctor/doctor.service.ts
+ M backend/src/emergency-contacts/emergency-contacts.controller.ts
+ M backend/src/emergency-contacts/emergency-contacts.service.ts
+ M backend/src/health-alerts/alert-rules.service.ts
+ M backend/src/health-alerts/health-alert-evaluator.service.ts
+ M backend/src/health-goals/health-goals.service.ts
+ M backend/src/health-metrics/health-metrics.service.spec.ts
+ M backend/src/health-metrics/health-metrics.service.ts
+ M backend/src/measurements/measurements.controller.ts
+ M backend/src/measurements/measurements.service.spec.ts
+ M backend/src/measurements/measurements.service.ts
+ M backend/src/medical-history/medical-history.service.spec.ts
+ M backend/src/medical-history/medical-history.service.ts
+ M backend/src/medications/medications.controller.ts
+ M backend/src/medications/medications.module.ts
+ M backend/src/medications/medications.service.spec.ts
+ M backend/src/medications/medications.service.ts
+ M backend/src/notifications/dto/notification-query.dto.ts
+ M backend/src/notifications/dto/update-notification-preferences.dto.ts
+ M backend/src/notifications/notifications.controller.ts
+ M backend/src/notifications/notifications.service.spec.ts
+ M backend/src/notifications/notifications.service.ts
+ M backend/src/reports/clinical-exports.service.spec.ts
+ M backend/src/reports/clinical-exports.service.ts
+ M backend/src/reports/reports.service.ts
+ M backend/src/wearables/dto/update-wearable.dto.ts
+ M backend/src/wearables/wearables.controller.ts
+ M backend/src/wearables/wearables.module.ts
+ M backend/src/wearables/wearables.service.ts
+ M backend/test/security.e2e-spec.ts
+ M backend/test/wearable-health.e2e-spec.ts
+ M deploy/nginx/default.conf
+ M docker-compose.production.yml
+ M docs/api-reference.md
+ M docs/deployment.md
+ M docs/security.md
+ M frontend/eslint.config.js
+ M frontend/package-lock.json
+ M frontend/package.json
+ M frontend/public/sw.js
+ M frontend/src/App.tsx
+ M frontend/src/components/auth/ProtectedRoute.tsx
+ M frontend/src/components/goals/HealthGoalsPanel.tsx
+ M frontend/src/index.css
+ M frontend/src/main.tsx
+ M frontend/src/pages/MeasurementsPage.tsx
+ M frontend/src/pages/MedicationsPage.tsx
+ M frontend/src/pages/NotificationsPage.tsx
+ M frontend/src/pages/admin/AdminDashboardPage.tsx
+ M frontend/src/pages/auth/LoginPage.tsx
+ M frontend/src/pages/auth/RegisterPage.tsx
+ M frontend/src/pages/auth/SecurityPage.tsx
+ M frontend/src/pages/doctor/DoctorDashboardPage.tsx
+ M frontend/src/pages/patient/GoalsPage.tsx
+ M frontend/src/pages/patient/PatientDashboardPage.tsx
+ M frontend/src/services/admin.service.ts
+ M frontend/src/services/auth.service.ts
+ M frontend/src/services/measurement.service.ts
+ M frontend/src/services/medication.service.ts
+ M frontend/src/services/notification.service.ts
+ M frontend/src/services/use-medications.ts
+ M frontend/src/types/admin.ts
+ M frontend/src/types/medication.ts
+ M frontend/src/utils/download-file.ts
+ M frontend/src/utils/health-goal-utils.ts
+ M frontend/tsconfig.app.json
+ M frontend/vite.config.ts
+?? .github/
+?? .task-revert-backup-20260916/
+?? .task-revert-safety-20260918-231803/
+?? 338
+?? backend/prisma/migrations/20260822153000_patient_wellness_workflows/
+?? backend/prisma/migrations/20260901120000_scheduling_privacy_wearable_security/
+?? backend/prisma/migrations/20260907171000_patient_privacy_workflows/
+?? backend/prisma/migrations/20260907173000_login_security_retention/
+?? backend/src/admin/dto/security-dashboard-query.dto.ts
+?? backend/src/appointments/availability-time.ts
+?? backend/src/appointments/doctor-availability.controller.ts
+?? backend/src/appointments/doctor-availability.service.spec.ts
+?? backend/src/appointments/doctor-availability.service.ts
+?? backend/src/appointments/dto/available-slot-query.dto.ts
+?? backend/src/appointments/dto/update-doctor-availability.dto.ts
+?? backend/src/auth/auth.login-security.spec.ts
+?? backend/src/auth/dto/two-factor.dto.ts
+?? backend/src/auth/two-factor-crypto.spec.ts
+?? backend/src/auth/two-factor-crypto.ts
+?? backend/src/calendar/
+?? backend/src/check-ins/
+?? backend/src/common/security/
+?? backend/src/data-retention/
+?? backend/src/documents/
+?? backend/src/emergency-contacts/dto/emergency-contact-notification-query.dto.ts
+?? backend/src/follow-up-plans/
+?? backend/src/measurements/dto/measurement-query.dto.ts
+?? backend/src/medication-interactions/
+?? backend/src/medications/dto/medication-query.dto.ts
+?? backend/src/medications/dto/update-medication-refill.dto.ts
+?? backend/src/medications/medication-refills.service.spec.ts
+?? backend/src/medications/medication-refills.service.ts
+?? backend/src/privacy/
+?? backend/src/search/
+?? backend/src/symptoms/
+?? backend/src/wearables/dto/wearable-sync-history-query.dto.ts
+?? backend/src/wearables/wearable-sync-monitor.service.ts
+?? backend/src/wellness/
+?? console.log(x))
+?? console.log(x))(2)
+?? docs/wellness-safety.md
+?? frontend/src/components/analytics/
+?? frontend/src/components/auth/ProtectedRoute.test.tsx
+?? frontend/src/components/auth/TwoFactorPanel.tsx
+?? frontend/src/components/check-ins/
+?? frontend/src/components/doctor/DoctorDocumentsPanel.tsx
+?? frontend/src/components/doctor/FollowUpPlansPanel.tsx
+?? frontend/src/components/medications/MedicationInteractionPanel.tsx
+?? frontend/src/components/medications/MedicationRefillPanel.tsx
+?? frontend/src/components/preferences/
+?? frontend/src/components/wellness/
+?? frontend/src/i18n/
+?? frontend/src/pages/MeasurementsPage.test.tsx
+?? frontend/src/pages/MedicationsPage.test.tsx
+?? frontend/src/pages/auth/LoginPage.test.tsx
+?? frontend/src/pages/auth/RegisterPage.test.tsx
+?? frontend/src/pages/patient/AppointmentsPage.test.tsx
+?? frontend/src/pages/patient/CalendarPage.tsx
+?? frontend/src/pages/patient/CheckInsPage.tsx
+?? frontend/src/pages/patient/DocumentsPage.tsx
+?? frontend/src/pages/patient/PrivacyPage.tsx
+?? frontend/src/pages/patient/SearchPage.tsx
+?? frontend/src/pages/patient/SymptomsPage.tsx
+?? frontend/src/pages/patient/WearablesPage.test.tsx
+?? frontend/src/preferences.css
+?? frontend/src/services/calendar.service.ts
+?? frontend/src/services/doctor-document.service.ts
+?? frontend/src/services/doctor-follow-up.service.ts
+?? frontend/src/services/patient-health.service.ts
+?? frontend/src/services/privacy.service.ts
+?? frontend/src/services/search.service.ts
+?? frontend/src/test/
+?? frontend/src/theme/
+?? frontend/src/types/calendar.ts
+?? frontend/src/types/follow-up-plan.ts
+?? frontend/src/types/patient-document.ts
+?? frontend/src/types/patient-health.ts
+?? frontend/src/types/privacy.ts
+?? frontend/src/types/search.ts
+?? frontend/src/utils/date-only.ts

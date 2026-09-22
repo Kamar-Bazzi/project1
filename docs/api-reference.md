@@ -24,7 +24,9 @@ in a deployment where API discovery is not desired.
 
 Common errors are `400` invalid input, `401` absent/invalid/expired session,
 `403` valid identity with the wrong role, `404` absent or out-of-scope object,
-`409` uniqueness/state conflict, and `429` throttled. The default application
+`409` uniqueness/state conflict, and `429` throttled. Document uploads can also
+return `413` for size/quota limits or `503` when required malware screening is
+unavailable. The default application
 limit is 120 requests/minute per route/client. Login and registration are 5,
 forgot-password and verification resend are 3, reset/verification confirmation
 are 5/10, and refresh is 20 per minute.
@@ -90,14 +92,18 @@ These routes require a `PATIENT` access token and derive the patient from it.
 | Resource           | Routes                                                                                                                                                 |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Profile            | `GET /patients/me`, `PATCH /patients/me`                                                                                                               |
-| Medications        | `GET/POST /medications`, `GET/PATCH/DELETE /medications/:id`, `PATCH /medications/:medicationId/logs/:logId/status`                                    |
+| Medications        | `GET/POST /medications`, `GET/PATCH/DELETE /medications/:id`, dose-log status, refill tracking, and `GET /medications/interactions`                    |
 | Measurements       | `GET/POST /measurements`, `GET/PATCH/DELETE /measurements/:id`                                                                                         |
+| Wellness snapshot  | `GET /wellness/summary`                                                                                                                                |
+| Daily check-ins    | `GET /check-ins`, `GET/PUT /check-ins/today`                                                                                                           |
+| Symptoms           | `GET/POST /symptoms`, `GET/PATCH/DELETE /symptoms/:symptomId`                                                                                         |
+| Documents          | `GET/POST /documents`, `GET /documents/:documentId/download`, `DELETE /documents/:documentId`                                                         |
 | Wearables          | `GET/POST /wearables`, `GET/PATCH/DELETE /wearables/:id`                                                                                               |
 | Health metrics     | `GET/POST /health-metrics`, `GET /health-metrics/latest`, `GET /health-metrics/history`, `POST /health-metrics/sync`, `POST /health-metrics/demo-sync` |
 | Health alerts      | `GET /health-alerts`, `GET /health-alerts/:id`, `PATCH /health-alerts/:id/acknowledge`, `PATCH /health-alerts/:id/resolve`                             |
 | Alert rules        | `GET/POST /alert-rules`, `GET/PATCH/DELETE /alert-rules/:id`                                                                                           |
 | Emergency contacts | `GET/POST /emergency-contacts`, `GET/PATCH/DELETE /emergency-contacts/:id`                                                                             |
-| Unified history    | `GET /medical-history`; `GET /medical-records/notes`; `GET /medical-records/follow-ups`                                                                |
+| Unified history    | `GET /medical-history`; notes, immutable follow-ups, and `GET /medical-records/follow-up-plans`                                                       |
 | Health goals       | `GET/POST /health-goals`, `GET/PATCH/DELETE /health-goals/:goalId`, `POST /health-goals/:goalId/progress`                                              |
 | Emergency mode     | `GET/POST /emergency-events`, `PATCH /emergency-events/:eventId/resolve`                                                                               |
 | Reports            | `GET /reports/health`, `GET /reports/health/export`                                                                                                    |
@@ -123,6 +129,15 @@ profile and applies an active `DoctorPatientAccess` predicate to clinical data.
 | PATCH    | `/doctor/patients/:patientId/notes/:noteId`   | Update a current-doctor-authored note inside the active assignment                                       |
 | GET/POST | `/doctor/patients/:patientId/follow-ups`      | Read or append immutable assigned-patient follow-up records                                              |
 | GET      | `/doctor/patients/:patientId/medical-history` | Read the assigned patient's unified clinical timeline                                                    |
+| GET      | `/doctor/patients/:patientId/symptoms`        | Read patient-recorded symptoms and explicitly linked records                                             |
+| GET      | `/doctor/patients/:patientId/check-ins`       | Read daily check-in history                                                                               |
+| GET      | `/doctor/patients/:patientId/check-ins/today` | Read today's patient-local-date check-in                                                                  |
+| GET/POST | `/doctor/patients/:patientId/follow-up-plans` | List or create current-doctor-authored plans and tasks                                                    |
+| PATCH    | `/doctor/patients/:patientId/follow-up-plans/:planId` | Update a current-doctor-authored plan                                                         |
+| POST     | `/doctor/patients/:patientId/follow-up-plans/:planId/tasks` | Add a task to a current-doctor-authored plan                                               |
+| PATCH    | `/doctor/patients/:patientId/follow-up-plans/:planId/tasks/:taskId` | Update a task on a current-doctor-authored plan                               |
+| GET      | `/doctor/patients/:patientId/documents`       | List private document metadata for an actively assigned patient                                           |
+| GET      | `/doctor/patients/:patientId/documents/:documentId/download` | Download one assigned-patient document after access and integrity checks                  |
 | GET      | `/doctor/patients/:patientId/goals`           | Read assigned-patient goals and progress                                                                 |
 | GET      | `/doctor/patients/:patientId/monitoring`      | Read a 7-, 30-, or 90-day assigned-patient trend report                                                  |
 
@@ -136,6 +151,9 @@ Every route requires the current database role `ADMIN`.
 | Method | Path                                      | Purpose                                                      |
 | ------ | ----------------------------------------- | ------------------------------------------------------------ |
 | GET    | `/admin/dashboard`                        | Account/role/status/assignment/audit summary                 |
+| GET    | `/admin/security/dashboard`               | Failed logins, locks, unusual access, limits, recent audits  |
+| POST   | `/admin/security/locked-accounts/:userId/unlock` | Clear a temporary login lock                          |
+| GET    | `/admin/data-retention/policies`          | Active database retention durations and cutoffs              |
 | GET    | `/admin/roles`                            | Supported role and account-status options                    |
 | GET    | `/admin/users`                            | Search/filter/paginate users                                 |
 | GET    | `/admin/users/:userId`                    | User detail                                                  |

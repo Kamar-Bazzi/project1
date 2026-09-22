@@ -45,6 +45,30 @@ describe('MockWearableProvider', () => {
     ]);
   });
 
+  it('supports successful mock sync through the common provider contract', async () => {
+    const result = await provider.sync(device);
+    const firstMeasurement = result.measurements[0];
+
+    expect(result.measurements).toHaveLength(7);
+    expect(firstMeasurement?.source).toBe(HealthMetricSource.MOCK);
+    expect(firstMeasurement?.externalRecordId).toEqual(
+      expect.stringContaining('mock:demo-watch:'),
+    );
+  });
+
+  it('connects and disconnects without real provider credentials', async () => {
+    await expect(
+      provider.connect({ deviceName: 'Development Watch' }),
+    ).resolves.toEqual({
+      provider: WearableProvider.MOCK,
+      deviceName: 'Development Watch',
+      externalDeviceId: 'demo-watch',
+    });
+    await expect(provider.disconnect(device)).resolves.toEqual({
+      success: true,
+    });
+  });
+
   it('labels every value as generated mock data, not a medical reading', () => {
     const measurements = provider.generateDemoMeasurements(device);
 

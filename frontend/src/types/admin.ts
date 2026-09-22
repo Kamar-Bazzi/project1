@@ -1,7 +1,4 @@
-import type {
-  AccountStatus,
-  UserRole,
-} from "../services/auth.service";
+import type { AccountStatus, UserRole } from "../services/auth.service";
 
 export interface Pagination {
   page: number;
@@ -105,6 +102,16 @@ export interface AuditLog {
   metadata: Record<string, unknown> | null;
   user: { id: string; name: string; email: string } | null;
   createdAt: string;
+}
+
+export interface AuditLogFilters {
+  page?: number;
+  pageSize?: number;
+  userId?: string;
+  action?: string;
+  entity?: string;
+  from?: string;
+  to?: string;
 }
 
 export interface AdminDashboard {
